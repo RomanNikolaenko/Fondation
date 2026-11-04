@@ -1,0 +1,21 @@
+[package]
+name = "fond-desktop"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Fond desktop shell"
+
+[lib]
+name = "fond_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { workspace = true }
+
+[dependencies]
+tauri = { workspace = true }
+tauri-plugin-notification = { workspace = true }
+tauri-plugin-single-instance = { workspace = true }
+
+[lints]
+workspace = true

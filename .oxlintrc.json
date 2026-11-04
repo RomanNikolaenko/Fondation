@@ -4,5 +4,6 @@
     "correctness": "error",
     "suspicious": "warn"
   },
+  "rules": { "typescript/no-extraneous-class": ["warn", { "allowWithDecorator": true }] },
   "ignorePatterns": ["**/generated/**", "**/dist/**", "target/**", ".superpowers/**", ".claude/**"]
 }
