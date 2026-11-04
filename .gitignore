@@ -1,0 +1,9 @@
+target/
+node_modules/
+dist/
+.angular/
+apps/desktop/src-tauri/binaries/*.exe
+*.db
+*.db-*
+.superpowers/
+.claude/

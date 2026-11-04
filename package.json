@@ -1,0 +1,24 @@
+{
+  "name": "fond",
+  "private": true,
+  "scripts": {
+    "fmt": "oxfmt . && cargo fmt --all",
+    "fmt:check": "oxfmt --check . && cargo fmt --all -- --check",
+    "build:web": "pnpm --filter desktop build",
+    "lint": "oxlint && stylelint \"apps/desktop/src/**/*.scss\" --allow-empty-input && cargo clippy --workspace --all-targets -- -D warnings",
+    "test": "cargo test --workspace && pnpm --filter desktop test",
+    "gen:types": "cargo test -p fond-api export_bindings",
+    "gen:check": "git diff --exit-code -- apps/desktop/src/app/core/generated",
+    "check": "pnpm fmt:check && pnpm build:web && pnpm lint && pnpm test && pnpm gen:check"
+  },
+  "devDependencies": {
+    "oxfmt": "^0.76.0",
+    "oxlint": "^1.91.0",
+    "stylelint": "^18.0.0",
+    "stylelint-config-standard-scss": "^17.0.0"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@12.16.1"
+}

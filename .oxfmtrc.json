@@ -1,0 +1,13 @@
+{
+  "printWidth": 100,
+  "singleQuote": true,
+  "ignorePatterns": [
+    "target/**",
+    "**/dist/**",
+    "**/generated/**",
+    "pnpm-lock.yaml",
+    "docs/**",
+    ".superpowers/**",
+    ".claude/**"
+  ]
+}

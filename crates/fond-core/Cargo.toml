@@ -1,0 +1,15 @@
+[package]
+name = "fond-core"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[features]
+ts = ["dep:ts-rs"]
+testkit = []
+
+[dependencies]
+ts-rs = { workspace = true, optional = true }
+
+[lints]
+workspace = true

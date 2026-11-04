@@ -1,0 +1,8 @@
+{
+  "plugins": ["typescript", "unicorn", "import"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn"
+  },
+  "ignorePatterns": ["**/generated/**", "**/dist/**", "target/**", ".superpowers/**", ".claude/**"]
+}

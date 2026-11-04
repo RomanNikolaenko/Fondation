@@ -1,0 +1,15 @@
+[package]
+name = "fond-backtest"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[features]
+ts = ["fond-core/ts", "fond-strategies/ts"]
+
+[dependencies]
+fond-core = { path = "../fond-core" }
+fond-strategies = { path = "../fond-strategies" }
+
+[lints]
+workspace = true
