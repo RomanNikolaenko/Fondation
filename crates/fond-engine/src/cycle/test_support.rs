@@ -112,6 +112,18 @@ pub(crate) fn tracked(
     }
 }
 
+/// Вставки в таблицю `table` завершуються помилкою SQLite (тригер); читання працюють.
+pub(crate) async fn fail_inserts(store: &Store, table: &str) {
+    let sql = format!(
+        "CREATE TRIGGER fail_insert_{table} BEFORE INSERT ON {table} \
+         BEGIN SELECT RAISE(ABORT, 'test: inserts into {table} are disabled'); END"
+    );
+    sqlx::query(sqlx::AssertSqlSafe(sql))
+        .execute(store.pool())
+        .await
+        .unwrap();
+}
+
 /// Галузь завжди «Technology».
 pub(crate) struct FakeIndustry;
 

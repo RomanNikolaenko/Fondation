@@ -1,7 +1,8 @@
 //! Фільтри входу: звіти (Finnhub) і новини (LLM-суддя) з кешем і бюджетом.
 //!
 //! Фільтри не повертають помилок: недоступне джерело (зокрема збій читання зі сховища)
-//! обробляється за політикою `on_unavailable`, а невдалий запис кешу чи витрат лише логується.
+//! обробляється за політикою `on_unavailable`. Невдалий запис у сховище потрапляє в журнал
+//! як подія Error; якщо не записано витрати LLM, діє `on_unavailable` (бюджет не перевірити).
 
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, Utc};
 use fond_api::config::{CautionPolicy, EngineConfig, UnavailablePolicy};
@@ -18,6 +19,7 @@ use crate::deps::Deps;
 
 pub const BUDGET_EXHAUSTED: &str = "Вичерпано бюджет LLM";
 pub const CAUTION_BLOCKED: &str = "Новини: обережно (політика режиму авто)";
+pub const USAGE_NOT_RECORDED: &str = "Новини: не вдалося записати витрати LLM";
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FilterOutcome {
@@ -57,8 +59,22 @@ async fn unavailable(
     }
 }
 
-fn warn_store(what: &str, s: &EntrySignal, e: &StoreError) {
+/// Збій запису в сховище: подія Error у журналі (best effort) і лог. Якщо не вдалося
+/// записати й саму подію, лишається лише лог.
+async fn store_failure(d: &Deps, s: &EntrySignal, what: &str, e: &StoreError) {
     tracing::warn!(error = %e, symbol = %s.symbol, "не вдалося зберегти {what}");
+    let logged = journal(
+        d,
+        EventKind::Error,
+        Some(&s.symbol),
+        None,
+        format!("Не вдалося зберегти {what}: {e}"),
+        json!({ "what": what, "error": e.to_string() }),
+    )
+    .await;
+    if let Err(je) = logged {
+        tracing::warn!(error = %je, symbol = %s.symbol, "не вдалося записати подію про збій сховища");
+    }
 }
 
 /// Звіт у межах `days_ahead` торгових днів від дня сигналу → відхилення.
@@ -82,7 +98,7 @@ pub async fn earnings_filter(
                 .put_earnings_check(&s.symbol, date, next, blocked, true)
                 .await;
             if let Err(e) = saved {
-                warn_store("перевірку звітів", s, &e);
+                store_failure(d, s, "перевірку звітів", &e).await;
             }
             match next {
                 Some(day) if blocked => FilterOutcome::Reject(format!(
@@ -99,7 +115,7 @@ pub async fn earnings_filter(
                 .put_earnings_check(&s.symbol, date, None, blocked, false)
                 .await;
             if let Err(err) = saved {
-                warn_store("перевірку звітів", s, &err);
+                store_failure(d, s, "перевірку звітів", &err).await;
             }
             let reason = format!("Фільтр звітів недоступний: {e}");
             unavailable(d, ec.on_unavailable, s, reason).await
@@ -203,15 +219,39 @@ pub async fn news_filter(
             cost,
         )
         .await;
-    if let Err(e) = usage {
-        warn_store("витрати LLM", s, &e);
-    }
+    let usage_recorded = match usage {
+        Ok(()) => true,
+        Err(e) => {
+            store_failure(d, s, "витрати LLM", &e).await;
+            false
+        }
+    };
+    // Вердикт кешується навіть без обліку витрат: повторний прогін не платить удруге.
     let saved = d
         .store
         .put_news_verdict(&s.symbol, date, &judgment.verdict, &judgment.model, now)
         .await;
     if let Err(e) = saved {
-        warn_store("вердикт новин", s, &e);
+        store_failure(d, s, "вердикт новин", &e).await;
+    }
+    if !usage_recorded {
+        // Бюджет більше не перевіряється надійно: за замовчуванням вхід не дозволяється.
+        // За політикою `Allow` відомий вердикт усе одно застосовується (Block не обходиться).
+        match policy {
+            UnavailablePolicy::Block => {
+                return FilterOutcome::Reject(USAGE_NOT_RECORDED.to_string());
+            }
+            UnavailablePolicy::Allow => {
+                let message = format!("{USAGE_NOT_RECORDED}; вхід дозволено політикою");
+                note(
+                    d,
+                    s,
+                    message,
+                    json!({ "reason": USAGE_NOT_RECORDED, "policy": "allow" }),
+                )
+                .await;
+            }
+        }
     }
     apply_verdict(cfg, judgment.verdict)
 }
@@ -242,8 +282,10 @@ mod tests {
     use fond_core::traits::Clock;
     use fond_core::types::StrategyId;
 
+    use fond_store::EventQuery;
+
     use super::*;
-    use crate::cycle::test_support::{d, fixture, sym};
+    use crate::cycle::test_support::{d, fail_inserts, fixture, judgment, sym};
     use crate::cycle::trading_calendar;
 
     fn utc(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> DateTime<Utc> {
@@ -265,6 +307,135 @@ mod tests {
 
     fn rejected_with(o: &FilterOutcome, prefix: &str) -> bool {
         matches!(o, FilterOutcome::Reject(m) if m.starts_with(prefix))
+    }
+
+    /// Повідомлення подій Error для AAPL (новіші першими).
+    async fn store_errors(dp: &Deps) -> Vec<String> {
+        dp.store
+            .events(&EventQuery {
+                kinds: vec![EventKind::Error],
+                symbol: Some(sym("AAPL")),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.message)
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn usage_write_failure_fails_closed_and_is_journaled() {
+        let (dp, h) = fixture().await;
+        fail_inserts(&dp.store, "llm_usage").await;
+        let s = signal(h.last_date());
+        let cfg = EngineConfig::default();
+        assert_eq!(
+            news_filter(&dp, &cfg, &s, "Apple Inc.").await,
+            FilterOutcome::Reject(USAGE_NOT_RECORDED.into())
+        );
+        assert_eq!(
+            USAGE_NOT_RECORDED,
+            "Новини: не вдалося записати витрати LLM"
+        );
+        assert_eq!(h.judge.calls(), 1);
+        let errs = store_errors(&dp).await;
+        assert_eq!(errs.len(), 1, "{errs:?}");
+        assert!(
+            errs[0].starts_with("Не вдалося зберегти витрати LLM"),
+            "{errs:?}"
+        );
+        // Вердикт усе ж закешовано: повторний прогін не платить удруге.
+        assert!(
+            dp.store
+                .news_verdict(&sym("AAPL"), h.last_date())
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn usage_write_failure_with_allow_policy_still_applies_verdict() {
+        let mut cfg = EngineConfig::default();
+        cfg.news_filter.on_unavailable = UnavailablePolicy::Allow;
+        for (verdict, want_block) in [(Verdict::Block, true), (Verdict::Allow, false)] {
+            let (dp, h) = fixture().await;
+            fail_inserts(&dp.store, "llm_usage").await;
+            h.judge
+                .set_result(Ok(judgment(verdict, &["Позов акціонерів"])));
+            let o = news_filter(&dp, &cfg, &signal(h.last_date()), "Apple Inc.").await;
+            if want_block {
+                assert_eq!(o, FilterOutcome::Reject("Новини: Позов акціонерів".into()));
+            } else {
+                assert!(
+                    matches!(&o, FilterOutcome::Pass { news: Some(v) } if v.verdict == Verdict::Allow),
+                    "{o:?}"
+                );
+            }
+            assert_eq!(store_errors(&dp).await.len(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn verdict_write_failure_is_journaled_but_outcome_kept() {
+        let (dp, h) = fixture().await;
+        fail_inserts(&dp.store, "news_verdicts").await;
+        let o = news_filter(
+            &dp,
+            &EngineConfig::default(),
+            &signal(h.last_date()),
+            "Apple Inc.",
+        )
+        .await;
+        assert!(
+            matches!(&o, FilterOutcome::Pass { news: Some(v) } if v.verdict == Verdict::Allow),
+            "{o:?}"
+        );
+        assert!(
+            dp.store
+                .news_verdict(&sym("AAPL"), h.last_date())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let errs = store_errors(&dp).await;
+        assert_eq!(errs.len(), 1, "{errs:?}");
+        assert!(
+            errs[0].starts_with("Не вдалося зберегти вердикт новин"),
+            "{errs:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn earnings_check_write_failure_is_journaled_but_outcome_kept() {
+        let (dp, h) = fixture().await;
+        fail_inserts(&dp.store, "earnings_checks").await;
+        let cfg = EngineConfig::default();
+        let cal = trading_calendar(&dp, h.last_date()).await.unwrap();
+        let s = signal(h.last_date());
+        assert_eq!(
+            earnings_filter(&dp, &cfg, &cal, &s).await,
+            FilterOutcome::Pass { news: None }
+        );
+        h.earnings.set(&sym("AAPL"), Ok(Some(d(2026, 11, 9))));
+        assert!(rejected_with(
+            &earnings_filter(&dp, &cfg, &cal, &s).await,
+            "Звіт 2026-11-09"
+        ));
+        h.earnings
+            .set(&sym("AAPL"), Err(DataError::Transient("503".into())));
+        assert!(rejected_with(
+            &earnings_filter(&dp, &cfg, &cal, &s).await,
+            "Фільтр звітів недоступний"
+        ));
+        let errs = store_errors(&dp).await;
+        assert_eq!(errs.len(), 3, "{errs:?}");
+        assert!(
+            errs.iter()
+                .all(|m| m.starts_with("Не вдалося зберегти перевірку звітів")),
+            "{errs:?}"
+        );
     }
 
     #[tokio::test]

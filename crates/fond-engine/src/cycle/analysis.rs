@@ -60,6 +60,24 @@ pub fn reject_text(r: &RejectReason) -> String {
     format!("Ризик: {text}")
 }
 
+/// Сектор з universe; порожній або відсутній — «Unknown».
+fn sector_of(entry: Option<&UniverseEntry>) -> String {
+    entry
+        .map(|e| e.sector.trim())
+        .filter(|x| !x.is_empty())
+        .unwrap_or(UNKNOWN_SECTOR)
+        .to_string()
+}
+
+/// Незавершений намір на вхід: ще може стати ордером або вже ним є.
+fn is_live_entry(i: &Intent) -> bool {
+    matches!(i.kind, IntentKind::Entry { .. })
+        && matches!(
+            i.status,
+            IntentStatus::PendingApproval | IntentStatus::Approved | IntentStatus::Submitted
+        )
+}
+
 fn scan_key(r: &ScanReject) -> &'static str {
     match r {
         ScanReject::NotTradable => "not_tradable",
@@ -143,16 +161,32 @@ impl Run<'_> {
 
         let strategies = build_all(&cfg.strategies);
         let positions = d.store.positions().await?;
-        let held = self
+        let mut held = self
             .exits(&ctx, &strategies, &positions, &mut summary)
             .await?;
 
-        let held_symbols: HashSet<&Symbol> = positions.iter().map(|p| &p.position.symbol).collect();
-        let candidates: Vec<&Symbol> = scan
-            .passed
+        // Наміри сесії (уже з новими виходами). Незавершений вхід на тікер (зокрема від
+        // іншої стратегії з попереднього прогону) не дублюється і займає місце в лімітах.
+        let session_intents = d.store.intents_for_session(self.session).await?;
+        let live_entries: Vec<&Intent> = session_intents
             .iter()
-            .filter(|s| !held_symbols.contains(s))
+            .filter(|i| is_live_entry(i))
             .collect();
+        let mut planned: BTreeMap<&Symbol, &Intent> = BTreeMap::new();
+        for i in &live_entries {
+            planned.entry(&i.symbol).or_insert(i);
+        }
+
+        let names: HashMap<&Symbol, &UniverseEntry> =
+            universe.iter().map(|e| (&e.symbol, e)).collect();
+        let held_symbols: HashSet<&Symbol> = positions.iter().map(|p| &p.position.symbol).collect();
+        let mut candidates: Vec<&Symbol> = Vec::with_capacity(scan.passed.len());
+        for s in scan.passed.iter().filter(|s| !held_symbols.contains(s)) {
+            match planned.get(s) {
+                Some(i) => self.already_planned(i).await?,
+                None => candidates.push(s),
+            }
+        }
         summary.candidates = candidates.len();
 
         let mut signals = Vec::new();
@@ -173,26 +207,45 @@ impl Run<'_> {
         // Завжди: порушення тижневого ліміту ставить паузу навіть без сигналів.
         let blocked = entries_block_reason(d, cfg, self.date).await?;
         let entries = self
-            .entries(cal, &universe, signals, blocked.is_none())
+            .entries(cal, &names, signals, blocked.is_none())
             .await?;
 
-        let planned = d
-            .store
-            .intents_for_session(self.session)
-            .await?
+        // Заплановані входи рахуються як позиції (вартість qty × ліміт) і витрачають кошти,
+        // так само як прийняті в цьому раунді кандидати.
+        let mut cash = cash;
+        for i in live_entries
             .iter()
-            .filter(|i| {
-                matches!(
-                    i.kind,
-                    IntentKind::Exit { .. } | IntentKind::MoveStop { .. }
-                )
+            .filter(|i| !held_symbols.contains(&i.symbol))
+        {
+            if let IntentKind::Entry {
+                qty, limit_price, ..
+            } = &i.kind
+            {
+                let value = f64::from(*qty) * to_f64(*limit_price);
+                cash -= value;
+                held.push(HeldPosition {
+                    symbol: i.symbol.clone(),
+                    strategy: i.strategy.clone(),
+                    sector: sector_of(names.get(&i.symbol).copied()),
+                    market_value: value,
+                });
+            }
+        }
+        let orders_planned = session_intents
+            .iter()
+            .filter(|i| match i.kind {
+                IntentKind::Exit { .. } | IntentKind::MoveStop { .. } => true,
+                IntentKind::Entry { .. } => matches!(
+                    i.status,
+                    IntentStatus::PendingApproval | IntentStatus::Approved
+                ),
             })
             .count();
         let snapshot = PortfolioSnapshot {
             equity,
             cash,
             positions: held,
-            orders_planned: u32::try_from(planned).unwrap_or(u32::MAX),
+            orders_planned: u32::try_from(orders_planned).unwrap_or(u32::MAX),
             entries_blocked: blocked,
             allocations: allocations(&cfg.strategies),
         };
@@ -535,12 +588,10 @@ impl Run<'_> {
     async fn entries(
         &self,
         cal: &TradingCalendar,
-        universe: &[UniverseEntry],
+        names: &HashMap<&Symbol, &UniverseEntry>,
         signals: Vec<EntrySignal>,
         run_filters: bool,
     ) -> Result<Entries, CycleError> {
-        let names: HashMap<&Symbol, &UniverseEntry> =
-            universe.iter().map(|e| (&e.symbol, e)).collect();
         let mut out = Entries {
             candidates: Vec::with_capacity(signals.len()),
             news: HashMap::new(),
@@ -564,14 +615,23 @@ impl Run<'_> {
                     }
                 }
             }
-            let sector = entry
-                .map(|e| e.sector.trim())
-                .filter(|x| !x.is_empty())
-                .unwrap_or(UNKNOWN_SECTOR)
-                .to_string();
+            let sector = sector_of(entry);
             out.candidates.push(Candidate { signal: s, sector });
         }
         Ok(out)
+    }
+
+    /// Кандидат уже має незавершений намір на вхід у цій сесії.
+    async fn already_planned(&self, i: &Intent) -> Result<(), CycleError> {
+        journal(
+            self.d,
+            EventKind::Intent,
+            Some(&i.symbol),
+            Some(&i.id),
+            format!("Вже заплановано: {}", i.id),
+            json!({ "strategy": i.strategy, "status": i.status, "session": self.session }),
+        )
+        .await
     }
 
     async fn reject_signal(
@@ -1163,7 +1223,8 @@ mod tests {
         let first = run_analysis(&d, &cfg, h.last_date()).await.unwrap();
         assert_eq!((first.entries_created, first.exits_created), (1, 1));
         let second = run_analysis(&d, &cfg, h.last_date()).await.unwrap();
-        assert_eq!(second.signals, 1);
+        // AAPL уже має намір на вхід: повторно не оцінюється (MSFT утримується).
+        assert_eq!((second.candidates, second.signals), (1, 0));
         assert_eq!((second.entries_created, second.exits_created), (0, 0));
 
         let all = intents(&d).await;
@@ -1172,7 +1233,128 @@ mod tests {
             assert_eq!(all.iter().filter(|i| i.symbol.as_str() == s).count(), 1);
         }
         assert_eq!(d.store.signals_on(h.last_date()).await.unwrap().len(), 1);
-        assert_eq!(h.judge.calls(), 1, "вердикт узято з кешу");
+        assert_eq!(h.judge.calls(), 1);
+        let planned = events(&d, EventKind::Intent, Some("AAPL")).await;
+        assert_eq!(
+            planned[0].message,
+            "Вже заплановано: 20261105-trend_pullback-AAPL-entry"
+        );
+    }
+
+    #[tokio::test]
+    async fn existing_entry_intent_blocks_duplicate_and_counts_toward_limits() {
+        let cases = [
+            (1, 20, "Ризик: досягнуто максимум відкритих позицій"),
+            (10, 1, "Ризик: досягнуто ліміт ордерів на день"),
+        ];
+        for (max_positions, max_orders, why) in cases {
+            let (d, h) = fixture().await;
+            // MSFT теж дає сигнал trend_pullback.
+            h.data.set_bars(
+                &sym("MSFT"),
+                uptrend_then_pullback(h.start_date(), N_BARS - 3, 3),
+            );
+            // З попереднього прогону: на AAPL уже схвалено вхід від іншої стратегії.
+            let now = h.clock.now();
+            let existing = Intent {
+                id: "20261105-breakout-AAPL-entry".into(),
+                session_date: session(),
+                signal_date: h.last_date(),
+                symbol: sym("AAPL"),
+                strategy: StrategyId::new(BREAKOUT),
+                kind: IntentKind::Entry {
+                    qty: 40,
+                    limit_price: dec!(300.00),
+                    stop_price: dec!(290.00),
+                    take_profit: None,
+                    risk_usd: 400.0,
+                    news: None,
+                },
+                status: IntentStatus::Approved,
+                explanation: "попередній прогін".into(),
+                created_at: now,
+                updated_at: now,
+                broker_order_id: None,
+                error: None,
+            };
+            assert!(d.store.insert_intent(&existing).await.unwrap());
+            let mut cfg = EngineConfig {
+                execution_mode: ExecutionMode::Auto,
+                ..EngineConfig::default()
+            };
+            cfg.risk.max_open_positions = max_positions;
+            cfg.risk.max_orders_per_day = max_orders;
+
+            let s = run_analysis(&d, &cfg, h.last_date()).await.unwrap();
+            assert_eq!(
+                (s.candidates, s.signals, s.entries_created),
+                (2, 1, 0),
+                "{why}"
+            );
+
+            let aapl_entries: Vec<Intent> = intents(&d)
+                .await
+                .into_iter()
+                .filter(|i| i.symbol.as_str() == "AAPL")
+                .collect();
+            assert_eq!(
+                aapl_entries,
+                vec![existing.clone()],
+                "лише попередній намір"
+            );
+            assert!(
+                d.store
+                    .signals_on(h.last_date())
+                    .await
+                    .unwrap()
+                    .iter()
+                    .all(|r| r.signal.symbol.as_str() != "AAPL")
+            );
+            let ev = events(&d, EventKind::Intent, Some("AAPL")).await;
+            assert_eq!(ev.len(), 1);
+            assert_eq!(
+                ev[0].message,
+                "Вже заплановано: 20261105-breakout-AAPL-entry"
+            );
+            assert_eq!(ev[0].intent_id.as_deref(), Some(existing.id.as_str()));
+
+            // Без урахування запланованого входу MSFT пройшов би обидва ліміти.
+            let msft = signal(&d, h.last_date(), "MSFT").await;
+            assert_eq!(msft.status, SignalStatus::Rejected);
+            assert_eq!(msft.reject_reason.as_deref(), Some(why));
+        }
+    }
+
+    #[tokio::test]
+    async fn terminal_entry_intent_does_not_block_new_signal() {
+        let (d, h) = fixture().await;
+        let now = h.clock.now();
+        let rejected = Intent {
+            id: "20261105-breakout-AAPL-entry".into(),
+            session_date: session(),
+            signal_date: h.last_date(),
+            symbol: sym("AAPL"),
+            strategy: StrategyId::new(BREAKOUT),
+            kind: IntentKind::Entry {
+                qty: 40,
+                limit_price: dec!(300.00),
+                stop_price: dec!(290.00),
+                take_profit: None,
+                risk_usd: 400.0,
+                news: None,
+            },
+            status: IntentStatus::Rejected,
+            explanation: String::new(),
+            created_at: now,
+            updated_at: now,
+            broker_order_id: None,
+            error: None,
+        };
+        assert!(d.store.insert_intent(&rejected).await.unwrap());
+        let s = run_analysis(&d, &EngineConfig::default(), h.last_date())
+            .await
+            .unwrap();
+        assert_eq!((s.candidates, s.entries_created), (3, 1));
     }
 
     #[tokio::test]

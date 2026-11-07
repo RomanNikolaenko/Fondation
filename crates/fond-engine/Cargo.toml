@@ -28,6 +28,7 @@ tracing-subscriber.workspace = true
 [dev-dependencies]
 fond-core = { path = "../fond-core", features = ["testkit"] }
 rust_decimal_macros.workspace = true
+sqlx.workspace = true
 tempfile.workspace = true
 
 [lints]

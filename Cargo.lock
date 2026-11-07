@@ -1511,6 +1511,7 @@ dependencies = [
  "rust_decimal",
  "rust_decimal_macros",
  "serde_json",
+ "sqlx",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
