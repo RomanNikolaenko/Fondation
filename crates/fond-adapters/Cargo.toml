@@ -6,6 +6,13 @@ publish.workspace = true
 
 [dependencies]
 fond-core = { path = "../fond-core" }
+keyring = { workspace = true, features = ["v1"] }
+reqwest.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }
 
 [lints]
 workspace = true
