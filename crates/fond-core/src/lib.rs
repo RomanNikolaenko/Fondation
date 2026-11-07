@@ -7,6 +7,7 @@ pub mod intent;
 pub mod orders;
 pub mod portfolio;
 pub mod price;
+pub mod risk;
 pub mod signal;
 pub mod traits;
 pub mod types;
