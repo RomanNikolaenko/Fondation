@@ -222,6 +222,39 @@ mod tests {
     }
 
     #[test]
+    fn restart_after_hours_without_records_catches_up_everything_in_order() {
+        // 17:00 ET: аналіз сьогодні вже настав, вікно відправки минуло.
+        let s = d(2026, 11, 5);
+        assert_eq!(
+            run(utc(2026, 11, 5, 22, 0), &Records::new(), None),
+            vec![
+                DueStep::Reconcile,
+                DueStep::Analysis { date: s },
+                DueStep::ApprovalDeadline { session: s },
+                DueStep::MissedSubmit { session: s },
+            ]
+        );
+    }
+
+    #[test]
+    fn restart_in_submit_window_without_records_emits_all_due_in_order() {
+        // 09:10 ET: аналіз сьогодні ще не настав, тож «останній» аналіз — за попередню сесію,
+        // а оскільки записів немає, він теж потрібен.
+        let s = d(2026, 11, 5);
+        assert_eq!(
+            run(utc(2026, 11, 5, 14, 10), &Records::new(), None),
+            vec![
+                DueStep::Reconcile,
+                DueStep::Analysis {
+                    date: d(2026, 11, 4)
+                },
+                DueStep::ApprovalDeadline { session: s },
+                DueStep::PreOpenSubmit { session: s },
+            ]
+        );
+    }
+
+    #[test]
     fn analysis_not_repeated_when_done() {
         let mut r = Records::new();
         session_done(&mut r, d(2026, 11, 4));
