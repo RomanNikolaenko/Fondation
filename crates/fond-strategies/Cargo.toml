@@ -5,10 +5,16 @@ edition.workspace = true
 publish.workspace = true
 
 [features]
-ts = ["fond-core/ts"]
+ts = ["dep:ts-rs", "fond-core/ts"]
 
 [dependencies]
 fond-core = { path = "../fond-core" }
+serde.workspace = true
+ts-rs = { workspace = true, optional = true }
+
+[dev-dependencies]
+fond-core = { path = "../fond-core", features = ["testkit"] }
+chrono.workspace = true
 
 [lints]
 workspace = true

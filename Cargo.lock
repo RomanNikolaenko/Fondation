@@ -1128,7 +1128,10 @@ dependencies = [
 name = "fond-strategies"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "fond-core",
+ "serde",
+ "ts-rs",
 ]
 
 [[package]]
