@@ -2,6 +2,8 @@
 
 pub mod analysis;
 pub mod filters;
+pub mod kill;
+pub mod reconcile;
 pub mod refresh;
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -85,29 +87,11 @@ pub fn week_monday(date: NaiveDate) -> NaiveDate {
     date - Duration::days(i64::from(date.weekday().num_days_from_monday()))
 }
 
-/// Ставить паузу, лише якщо рушій працює (аварійну зупинку не «понижує»).
-/// Пише подію в журнал і публікує `AutoPaused`. `true`, якщо режим змінено.
+/// Ставить паузу, лише якщо рушій працює (аварійну зупинку не «понижує»): спільний шлях
+/// з [`kill::pause`] — один умовний запит до сховища, журнал і `AutoPaused` лише при зміні.
+/// `true`, якщо режим змінено.
 pub async fn auto_pause(d: &Deps, reason: &str) -> Result<bool, CycleError> {
-    if d.store.engine_mode().await? != EngineMode::Running {
-        return Ok(false);
-    }
-    let mode = EngineMode::Paused {
-        reason: reason.to_string(),
-    };
-    d.store.set_engine_mode(&mode, d.clock.now()).await?;
-    journal(
-        d,
-        EventKind::Pause,
-        None,
-        None,
-        format!("Автопауза: {reason}"),
-        serde_json::json!({ "reason": reason }),
-    )
-    .await?;
-    d.bus.publish(EngineEventDto::AutoPaused {
-        reason: reason.to_string(),
-    });
-    Ok(true)
+    kill::pause_changed(d, reason).await
 }
 
 /// Чому нові входи заборонені (або `None`).

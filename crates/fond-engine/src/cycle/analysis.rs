@@ -61,7 +61,7 @@ pub fn reject_text(r: &RejectReason) -> String {
 }
 
 /// Сектор з universe; порожній або відсутній — «Unknown».
-fn sector_of(entry: Option<&UniverseEntry>) -> String {
+pub(crate) fn sector_of(entry: Option<&UniverseEntry>) -> String {
     entry
         .map(|e| e.sector.trim())
         .filter(|x| !x.is_empty())

@@ -3,9 +3,13 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::{Datelike, Duration, NaiveDate, NaiveTime};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, Utc};
+use fond_api::events::EngineEventDto;
 use fond_core::calendar::et_to_utc;
 use fond_core::error::DataError;
+use fond_core::ids::{IntentTag, client_order_id, intent_id};
+use fond_core::intent::{Intent, IntentKind, IntentStatus};
+use fond_core::orders::{BrokerOrder, OrderClass, OrderRequest, OrderType, Side, TimeInForce};
 use fond_core::portfolio::{Position, TrackedPosition};
 use fond_core::testkit::{
     FakeBroker, FakeClock, FakeEarnings, FakeJudge, FakeMarketData, FakeNews, bars_from_closes,
@@ -13,7 +17,10 @@ use fond_core::testkit::{
 };
 use fond_core::traits::{AssetInfo, NewsJudgment, NewsVerdict, Session, Verdict};
 use fond_core::types::{Bar, StrategyId, Symbol};
-use fond_store::{Store, UniverseEntry, UniverseSource};
+use fond_store::{EventQuery, Store, UniverseEntry, UniverseSource};
+use rust_decimal::Decimal;
+use rust_decimal_macros::dec;
+use tokio::sync::broadcast;
 
 use crate::deps::{Deps, IndustryLookup};
 use crate::events::EventBus;
@@ -110,6 +117,164 @@ pub(crate) fn tracked(
         stop_order_id: stop_order_id.map(str::to_string),
         intent_id: format!("20261028-{strategy}-{symbol}-entry"),
     }
+}
+
+/// Стратегія намірів у тестах звірки та аварійної зупинки.
+pub(crate) const STRATEGY: &str = "trend_pullback";
+
+/// Сесія, на яку створено наміри: четвер після дня аналізу.
+pub(crate) fn session() -> NaiveDate {
+    d(2026, 11, 5)
+}
+
+/// Момент `h:m` за Нью-Йорком у дату `date`.
+pub(crate) fn et(date: NaiveDate, h: u32, m: u32) -> DateTime<Utc> {
+    et_to_utc(date, hm(h, m))
+}
+
+/// Намір сесії `session()` зі статусом `status` (id за `intent_id`).
+pub(crate) fn intent_with(
+    symbol: &str,
+    tag: IntentTag,
+    kind: IntentKind,
+    status: IntentStatus,
+    broker_order_id: Option<&str>,
+) -> Intent {
+    let strategy = StrategyId::new(STRATEGY);
+    let at = et(last_date(), 16, 30);
+    Intent {
+        id: intent_id(session(), &strategy, &sym(symbol), tag),
+        session_date: session(),
+        signal_date: last_date(),
+        symbol: sym(symbol),
+        strategy,
+        kind,
+        status,
+        explanation: "тест".into(),
+        created_at: at,
+        updated_at: at,
+        broker_order_id: broker_order_id.map(str::to_string),
+        error: None,
+    }
+}
+
+pub(crate) fn entry_kind(
+    qty: u32,
+    limit: Decimal,
+    stop: Decimal,
+    take_profit: Option<Decimal>,
+) -> IntentKind {
+    IntentKind::Entry {
+        qty,
+        limit_price: limit,
+        stop_price: stop,
+        take_profit,
+        risk_usd: 50.0,
+        news: None,
+    }
+}
+
+/// Відправлений вхід: OTO (або Bracket з ціллю) Buy Limit Day у брокері й намір `Submitted`.
+pub(crate) async fn submit_entry(
+    dp: &Deps,
+    symbol: &str,
+    qty: u32,
+    limit: Decimal,
+    stop: Decimal,
+    take_profit: Option<Decimal>,
+) -> (Intent, BrokerOrder) {
+    let draft = intent_with(
+        symbol,
+        IntentTag::Entry,
+        entry_kind(qty, limit, stop, take_profit),
+        IntentStatus::Submitted,
+        None,
+    );
+    let req = OrderRequest {
+        client_order_id: client_order_id(&draft.id),
+        symbol: sym(symbol),
+        side: Side::Buy,
+        qty,
+        order_type: OrderType::Limit,
+        limit_price: Some(limit),
+        stop_price: None,
+        tif: TimeInForce::Day,
+        class: if take_profit.is_some() {
+            OrderClass::Bracket
+        } else {
+            OrderClass::Oto
+        },
+        stop_loss: Some(stop),
+        take_profit,
+    };
+    let order = dp.broker.submit(&req).await.unwrap();
+    let intent = Intent {
+        broker_order_id: Some(order.id.clone()),
+        ..draft
+    };
+    assert!(dp.store.insert_intent(&intent).await.unwrap());
+    (intent, order)
+}
+
+/// Відправлений вихід: Sell Market Opg Simple у брокері й намір `Submitted`.
+pub(crate) async fn submit_exit(dp: &Deps, symbol: &str, qty: u32) -> (Intent, BrokerOrder) {
+    let kind = IntentKind::Exit {
+        qty,
+        reason: "сигнал виходу".into(),
+    };
+    let draft = intent_with(symbol, IntentTag::Exit, kind, IntentStatus::Submitted, None);
+    let req = OrderRequest {
+        client_order_id: client_order_id(&draft.id),
+        symbol: sym(symbol),
+        side: Side::Sell,
+        qty,
+        order_type: OrderType::Market,
+        limit_price: None,
+        stop_price: None,
+        tif: TimeInForce::Opg,
+        class: OrderClass::Simple,
+        stop_loss: None,
+        take_profit: None,
+    };
+    let order = dp.broker.submit(&req).await.unwrap();
+    let intent = Intent {
+        broker_order_id: Some(order.id.clone()),
+        ..draft
+    };
+    assert!(dp.store.insert_intent(&intent).await.unwrap());
+    (intent, order)
+}
+
+/// AAPL: вхід 10 шт. за лімітом 101.00 зі стопом 95.50, виконаний о 09:31 ET сесії
+/// й звірений. Повертає намір і відстежувану позицію (стоп — нога `ord-1-stop`).
+pub(crate) async fn held_aapl(dp: &Deps, h: &Handles) -> (Intent, TrackedPosition) {
+    let (intent, order) = submit_entry(dp, "AAPL", 10, dec!(101.00), dec!(95.50), None).await;
+    h.broker
+        .fill_at(&order.id, dec!(101.00), 10, et(session(), 9, 31));
+    super::reconcile::reconcile(dp).await.unwrap();
+    let held = dp.store.positions().await.unwrap();
+    assert_eq!(held.len(), 1);
+    (intent, held.into_iter().next().unwrap())
+}
+
+/// Усі опубліковані події, що накопичились у підписника.
+pub(crate) fn drain(rx: &mut broadcast::Receiver<EngineEventDto>) -> Vec<EngineEventDto> {
+    let mut out = Vec::new();
+    while let Ok(e) = rx.try_recv() {
+        out.push(e);
+    }
+    out
+}
+
+/// Повідомлення журналу (новіші першими).
+pub(crate) async fn journal_messages(dp: &Deps) -> Vec<String> {
+    dp.store
+        .events(&EventQuery::default())
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| e.message)
+        .collect()
 }
 
 /// Вставки в таблицю `table` завершуються помилкою SQLite (тригер); читання працюють.

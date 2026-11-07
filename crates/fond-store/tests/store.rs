@@ -257,6 +257,40 @@ async fn engine_mode_defaults_to_running_and_roundtrips() {
 }
 
 #[tokio::test]
+async fn pause_if_running_only_changes_running_mode() {
+    let s = Store::open_in_memory().await.unwrap();
+    // Без запису режим — Running: пауза вставляє рядок.
+    assert!(s.pause_if_running("ліміт", t(10, 0)).await.unwrap());
+    let paused = EngineMode::Paused {
+        reason: "ліміт".into(),
+    };
+    assert_eq!(s.engine_mode().await.unwrap(), paused);
+    // Повторна пауза не перезаписує причину.
+    assert!(!s.pause_if_running("інша", t(10, 5)).await.unwrap());
+    assert_eq!(s.engine_mode().await.unwrap(), paused);
+    // Аварійна зупинка ніколи не «понижується» до паузи.
+    let killed = EngineMode::Killed {
+        reason: "користувач".into(),
+    };
+    s.set_engine_mode(&killed, t(11, 0)).await.unwrap();
+    assert!(!s.pause_if_running("розбіжність", t(11, 5)).await.unwrap());
+    assert_eq!(s.engine_mode().await.unwrap(), killed);
+    // З Running (наявний рядок) — пауза; last_reconcile_at не зачіпається.
+    s.set_last_reconcile_at(t(11, 30)).await.unwrap();
+    s.set_engine_mode(&EngineMode::Running, t(12, 0))
+        .await
+        .unwrap();
+    assert!(s.pause_if_running("розбіжність", t(12, 5)).await.unwrap());
+    assert_eq!(
+        s.engine_mode().await.unwrap(),
+        EngineMode::Paused {
+            reason: "розбіжність".into()
+        }
+    );
+    assert_eq!(s.last_reconcile_at().await.unwrap(), Some(t(11, 30)));
+}
+
+#[tokio::test]
 async fn last_reconcile_roundtrip_keeps_mode() {
     let s = Store::open_in_memory().await.unwrap();
     assert_eq!(s.last_reconcile_at().await.unwrap(), None);

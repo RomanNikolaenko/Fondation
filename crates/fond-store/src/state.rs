@@ -45,6 +45,22 @@ impl Store {
         Ok(())
     }
 
+    /// Ставить паузу лише з `Running` (зокрема коли запису ще немає) одним умовним запитом:
+    /// паралельна аварійна зупинка чи інша пауза ніколи не перезаписується.
+    /// `true`, якщо режим змінено.
+    pub async fn pause_if_running(&self, reason: &str, at: DateTime<Utc>) -> Result<bool> {
+        let res = sqlx::query(
+            "INSERT INTO engine_state (id, mode, reason, updated_at) VALUES (1, 'paused', ?, ?) \
+             ON CONFLICT(id) DO UPDATE SET mode = excluded.mode, reason = excluded.reason, \
+             updated_at = excluded.updated_at WHERE engine_state.mode = 'running'",
+        )
+        .bind(reason)
+        .bind(fmt_ts(at))
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() == 1)
+    }
+
     pub async fn last_reconcile_at(&self) -> Result<Option<DateTime<Utc>>> {
         let v: Option<Option<String>> =
             sqlx::query_scalar("SELECT last_reconcile_at FROM engine_state WHERE id = 1")
