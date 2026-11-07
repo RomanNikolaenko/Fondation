@@ -38,7 +38,7 @@ fn bar(t: &str, c: f64) -> serde_json::Value {
 #[tokio::test]
 async fn bars_pagination_merges_pages() {
     let server = MockServer::start().await;
-    // Друга сторінка (вужчий матчер, вищий пріоритет).
+    // Second page (narrower matcher, higher priority).
     Mock::given(method("GET"))
         .and(path("/v2/stocks/bars"))
         .and(query_param("page_token", "tok2"))
@@ -140,7 +140,7 @@ async fn bars_dates_are_new_york_dates() {
         .await
         .unwrap();
     let bars = &out[&Symbol::new("AAPL")];
-    // 05:00Z узимку = 00:00 EST; 04:00Z влітку = 00:00 EDT; дублікат за датою відкинуто
+    // 05:00Z in winter = 00:00 EST; 04:00Z in summer = 00:00 EDT; duplicate date dropped
     let dates: Vec<_> = bars.iter().map(|b| b.date).collect();
     assert_eq!(dates, vec![d(2026, 7, 1), d(2026, 11, 4)]);
 }
@@ -167,7 +167,7 @@ async fn dotted_symbols_are_url_encoded() {
         .mount(&server)
         .await;
     let c = client(&server);
-    // Порядок у запиті сортований незалежно від порядку на вході.
+    // The request order is sorted regardless of the input order.
     let syms = [Symbol::new("BRK.B"), Symbol::new("AAPL")];
     let out = c
         .daily_bars(&syms, d(2026, 11, 3), d(2026, 11, 3))
@@ -331,7 +331,7 @@ async fn bars_batches_of_100_symbols() {
         .expect(1)
         .mount(&server)
         .await;
-    syms.reverse(); // порядок на вході не важливий: розбиття йде за відсортованим
+    syms.reverse(); // input order is irrelevant: chunking follows the sorted order
     let out = client(&server)
         .daily_bars(&syms, d(2026, 11, 3), d(2026, 11, 3))
         .await
