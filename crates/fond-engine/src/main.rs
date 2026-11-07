@@ -2,6 +2,7 @@ mod config_io;
 mod lock;
 mod logging;
 mod paths;
+mod schedule;
 
 use std::path::PathBuf;
 

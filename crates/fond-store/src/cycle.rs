@@ -3,7 +3,7 @@ use sqlx::Row;
 
 use crate::{Result, Store, StoreError, fmt_date, fmt_ts, parse_ts};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StepName {
     Analysis,
     ApprovalDeadline,
