@@ -73,6 +73,21 @@ pub enum ExecutionMode {
     Auto,
 }
 
+/// Режим рушія: працює, призупинений (нові входи заборонені) або вимкнений аварійно.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub enum EngineMode {
+    #[default]
+    Running,
+    Paused {
+        reason: String,
+    },
+    Killed {
+        reason: String,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -91,6 +106,15 @@ mod tests {
         );
         let s: StrategyId = serde_json::from_str("\"breakout\"").unwrap();
         assert_eq!(s.as_str(), "breakout");
+    }
+
+    #[test]
+    fn engine_mode_serde_and_default() {
+        assert_eq!(EngineMode::default(), EngineMode::Running);
+        let m = EngineMode::Paused { reason: "x".into() };
+        let j = serde_json::to_string(&m).unwrap();
+        assert_eq!(j, r#"{"type":"paused","reason":"x"}"#);
+        assert_eq!(serde_json::from_str::<EngineMode>(&j).unwrap(), m);
     }
 
     #[test]

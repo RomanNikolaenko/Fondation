@@ -1,0 +1,16 @@
+symbol,name,sector
+SPY,SPDR S&P 500 ETF Trust,ETF:SPY
+QQQ,Invesco QQQ Trust,ETF:QQQ
+IWM,iShares Russell 2000 ETF,ETF:IWM
+DIA,SPDR Dow Jones Industrial Average ETF Trust,ETF:DIA
+XLK,Technology Select Sector SPDR Fund,Information Technology
+XLF,Financial Select Sector SPDR Fund,Financials
+XLE,Energy Select Sector SPDR Fund,Energy
+XLV,Health Care Select Sector SPDR Fund,Health Care
+XLY,Consumer Discretionary Select Sector SPDR Fund,Consumer Discretionary
+XLP,Consumer Staples Select Sector SPDR Fund,Consumer Staples
+XLI,Industrial Select Sector SPDR Fund,Industrials
+XLB,Materials Select Sector SPDR Fund,Materials
+XLU,Utilities Select Sector SPDR Fund,Utilities
+XLRE,Real Estate Select Sector SPDR Fund,Real Estate
+XLC,Communication Services Select Sector SPDR Fund,Communication Services

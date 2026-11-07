@@ -6,6 +6,16 @@ publish.workspace = true
 
 [dependencies]
 fond-core = { path = "../fond-core" }
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx = { workspace = true, features = ["macros"] }
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
 workspace = true
