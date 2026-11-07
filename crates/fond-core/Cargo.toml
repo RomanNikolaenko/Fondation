@@ -9,7 +9,17 @@ ts = ["dep:ts-rs"]
 testkit = []
 
 [dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+rust_decimal.workspace = true
+serde.workspace = true
+thiserror.workspace = true
 ts-rs = { workspace = true, optional = true }
+
+[dev-dependencies]
+rust_decimal_macros.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]
 workspace = true
