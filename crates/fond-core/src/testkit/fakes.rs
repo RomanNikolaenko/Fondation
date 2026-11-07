@@ -363,7 +363,7 @@ impl Broker for FakeBroker {
             client_order_id: req.client_order_id.clone(),
             symbol: req.symbol.clone(),
             side: req.side,
-            order_type: req.order_type,
+            order_type: req.order_type.clone(),
             qty: req.qty,
             filled_qty: 0,
             filled_avg_price: None,

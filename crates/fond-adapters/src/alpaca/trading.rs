@@ -173,12 +173,8 @@ fn side_str(s: Side) -> &'static str {
     }
 }
 
-fn type_str(t: OrderType) -> &'static str {
-    match t {
-        OrderType::Market => "market",
-        OrderType::Limit => "limit",
-        OrderType::Stop => "stop",
-    }
+fn type_str(t: &OrderType) -> String {
+    String::from(t.clone())
 }
 
 fn tif_str(t: TimeInForce) -> &'static str {
@@ -194,7 +190,7 @@ fn order_body(req: &OrderRequest) -> Value {
     m.insert("symbol".into(), json!(req.symbol.as_str()));
     m.insert("qty".into(), json!(req.qty.to_string()));
     m.insert("side".into(), json!(side_str(req.side)));
-    m.insert("type".into(), json!(type_str(req.order_type)));
+    m.insert("type".into(), json!(type_str(&req.order_type)));
     m.insert("time_in_force".into(), json!(tif_str(req.tif)));
     if let Some(p) = req.limit_price {
         m.insert("limit_price".into(), json!(p.to_string()));

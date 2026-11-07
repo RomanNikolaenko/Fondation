@@ -14,13 +14,38 @@ pub enum Side {
     Sell,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+/// Тип ордера. Невідомі брокерські типи (`stop_limit`, `trailing_stop` …) зберігаються в `Other`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(type = "string"))]
 pub enum OrderType {
     Market,
     Limit,
     Stop,
+    Other(String),
+}
+
+impl From<String> for OrderType {
+    fn from(s: String) -> Self {
+        match s.as_str() {
+            "market" => Self::Market,
+            "limit" => Self::Limit,
+            "stop" => Self::Stop,
+            _ => Self::Other(s),
+        }
+    }
+}
+
+impl From<OrderType> for String {
+    fn from(t: OrderType) -> Self {
+        match t {
+            OrderType::Market => "market".into(),
+            OrderType::Limit => "limit".into(),
+            OrderType::Stop => "stop".into(),
+            OrderType::Other(s) => s,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -126,6 +151,19 @@ pub struct BrokerOrder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn order_type_serde_roundtrip() {
+        for (t, raw) in [
+            (OrderType::Market, "\"market\""),
+            (OrderType::Limit, "\"limit\""),
+            (OrderType::Stop, "\"stop\""),
+            (OrderType::Other("stop_limit".into()), "\"stop_limit\""),
+        ] {
+            assert_eq!(serde_json::to_string(&t).unwrap(), raw);
+            assert_eq!(serde_json::from_str::<OrderType>(raw).unwrap(), t);
+        }
+    }
 
     #[test]
     fn status_open_and_terminal() {

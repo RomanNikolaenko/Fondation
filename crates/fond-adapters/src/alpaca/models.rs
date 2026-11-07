@@ -77,7 +77,8 @@ pub struct WireOrder {
     pub side: String,
     #[serde(rename = "type")]
     pub order_type: String,
-    pub qty: String,
+    #[serde(default)]
+    pub qty: Option<String>,
     #[serde(default)]
     pub filled_qty: Option<String>,
     #[serde(default)]
@@ -123,7 +124,7 @@ impl TryFrom<WireOrder> for BrokerOrder {
             "market" => OrderType::Market,
             "limit" => OrderType::Limit,
             "stop" => OrderType::Stop,
-            other => return Err(bad("order type", other)),
+            other => OrderType::Other(other.to_string()),
         };
         let legs = w
             .legs
@@ -137,7 +138,11 @@ impl TryFrom<WireOrder> for BrokerOrder {
             symbol: Symbol::new(&w.symbol),
             side,
             order_type,
-            qty: qty_u32(&w.qty)?,
+            // Notional-ордери приходять без qty: трактуємо як 0.
+            qty: match w.qty.as_deref() {
+                Some(s) => qty_u32(s)?,
+                None => 0,
+            },
             filled_qty: match w.filled_qty.as_deref() {
                 Some(s) => qty_u32(s)?,
                 None => 0,

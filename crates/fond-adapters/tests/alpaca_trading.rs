@@ -411,7 +411,7 @@ async fn nested_legs_parsed() {
 }
 
 #[tokio::test]
-async fn unknown_order_type_is_other_error() {
+async fn unknown_order_type_maps_to_other() {
     let server = MockServer::start().await;
     let mut o = order_json("o1", "new");
     o["type"] = json!("trailing_stop");
@@ -420,10 +420,40 @@ async fn unknown_order_type_is_other_error() {
         .respond_with(ResponseTemplate::new(200).set_body_json(o))
         .mount(&server)
         .await;
-    assert!(matches!(
-        client(&server).order("o1").await.unwrap_err(),
-        BrokerError::Other(_)
-    ));
+    let o = client(&server).order("o1").await.unwrap();
+    assert_eq!(o.order_type, OrderType::Other("trailing_stop".into()));
+}
+
+#[tokio::test]
+async fn open_orders_survives_unknown_type_and_notional() {
+    let server = MockServer::start().await;
+    let mut oto = order_json("o1", "new");
+    oto["legs"] = json!([{
+        "id": "l1", "client_order_id": "leg-1", "symbol": "AAPL", "side": "sell",
+        "type": "stop", "qty": "148", "filled_qty": "0", "limit_price": null,
+        "stop_price": "95.00", "status": "held", "legs": null
+    }]);
+    let mut stop_limit = order_json("o2", "accepted");
+    stop_limit["type"] = json!("stop_limit");
+    let mut notional = order_json("o3", "accepted");
+    notional["type"] = json!("market");
+    notional["qty"] = Value::Null;
+    notional["filled_qty"] = Value::Null;
+    notional["notional"] = json!("500");
+    Mock::given(method("GET"))
+        .and(path("/v2/orders"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([oto, stop_limit, notional])))
+        .mount(&server)
+        .await;
+    let o = client(&server).open_orders().await.unwrap();
+    assert_eq!(o.len(), 3);
+    assert_eq!(o[0].order_type, OrderType::Limit);
+    assert_eq!(o[0].legs.len(), 1);
+    assert_eq!(o[1].order_type, OrderType::Other("stop_limit".into()));
+    assert_eq!(o[1].qty, 148);
+    assert_eq!(o[2].order_type, OrderType::Market);
+    assert_eq!(o[2].qty, 0);
+    assert_eq!(o[2].filled_qty, 0);
 }
 
 #[tokio::test]
