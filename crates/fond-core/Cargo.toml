@@ -11,6 +11,7 @@ testkit = []
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
+chrono-tz.workspace = true
 rust_decimal.workspace = true
 serde.workspace = true
 thiserror.workspace = true
