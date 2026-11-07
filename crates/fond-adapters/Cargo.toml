@@ -10,9 +10,17 @@ keyring = { workspace = true, features = ["v1"] }
 reqwest.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+url.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+rust_decimal.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["test-util", "macros"] }
+tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
+wiremock.workspace = true
+rust_decimal_macros.workspace = true
 
 [lints]
 workspace = true
