@@ -5,11 +5,15 @@ edition.workspace = true
 publish.workspace = true
 
 [features]
-ts = ["fond-core/ts", "fond-strategies/ts"]
+ts = ["dep:ts-rs", "fond-core/ts", "fond-strategies/ts"]
 
 [dependencies]
 fond-core = { path = "../fond-core" }
 fond-strategies = { path = "../fond-strategies" }
+serde.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+ts-rs = { workspace = true, optional = true }
 
 [lints]
 workspace = true

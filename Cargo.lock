@@ -1075,8 +1075,12 @@ dependencies = [
 name = "fond-backtest"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "fond-core",
  "fond-strategies",
+ "serde",
+ "thiserror 2.0.21",
+ "ts-rs",
 ]
 
 [[package]]
