@@ -1,7 +1,7 @@
 //! Фейкові реалізації портів. Стан — у `std::sync::Mutex` (без `await` під блокуванням).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, NaiveDate, Utc};
@@ -63,10 +63,23 @@ struct BrokerState {
 /// якщо відкритий сам ордер або будь-яка з його ніг.
 pub struct FakeBroker {
     state: Mutex<BrokerState>,
+    clock: Arc<dyn Clock>,
+}
+
+/// Час виконання за замовчуванням: 2026-01-02T15:00:00Z (детермінований).
+pub fn default_fill_time() -> DateTime<Utc> {
+    DateTime::from_timestamp(1_767_366_000, 0).expect("valid timestamp")
 }
 
 impl Default for FakeBroker {
     fn default() -> Self {
+        Self::with_clock(Arc::new(FakeClock::new(default_fill_time())))
+    }
+}
+
+impl FakeBroker {
+    /// Брокер, що бере час виконання (`filled_at`) з переданого годинника.
+    pub fn with_clock(clock: Arc<dyn Clock>) -> Self {
         let hundred_k = Decimal::from(100_000);
         Self {
             state: Mutex::new(BrokerState {
@@ -84,6 +97,7 @@ impl Default for FakeBroker {
                 fail_next: None,
                 fail_cancel: HashSet::new(),
             }),
+            clock,
         }
     }
 }
@@ -188,6 +202,11 @@ impl FakeBroker {
     /// Виконує `qty` акцій ордера за `price` (приріст до вже виконаного). Часткове виконання
     /// дає `PartiallyFilled`; повне — `Filled`, і тоді стоп-нога стає `New`. Позиції оновлюються.
     pub fn fill(&self, id: &str, price: Decimal, qty: u32) {
+        self.fill_at(id, price, qty, self.clock.now());
+    }
+
+    /// Як `fill`, але з явним часом виконання.
+    pub fn fill_at(&self, id: &str, price: Decimal, qty: u32, at: DateTime<Utc>) {
         let mut guard = self.lock();
         let st = &mut *guard;
         let order = find_mut(&mut st.orders, id).expect("fill: unknown order id");
@@ -202,7 +221,7 @@ impl FakeBroker {
             order.status = OrderStatus::PartiallyFilled;
         } else {
             order.status = OrderStatus::Filled;
-            order.filled_at = Some(Utc::now());
+            order.filled_at = Some(at);
             for l in order.legs.iter_mut().filter(|l| l.stop_price.is_some()) {
                 if l.status == OrderStatus::Held {
                     l.status = OrderStatus::New;
@@ -759,6 +778,29 @@ mod tests {
         assert_eq!(sell.side, Side::Sell);
         br.fill("ord-1-stop", dec!(95.00), 10);
         assert!(br.positions().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn filled_at_comes_from_injected_clock_or_explicit_time() {
+        let t = Utc.with_ymd_and_hms(2026, 3, 10, 3, 59, 0).unwrap();
+        let clock = Arc::new(FakeClock::new(t));
+        let br = FakeBroker::with_clock(clock.clone());
+        br.submit(&sample_oto_request("a")).await.unwrap();
+        br.fill("ord-1", dec!(100.00), 10);
+        assert_eq!(br.order("ord-1").await.unwrap().filled_at, Some(t));
+
+        br.submit(&sample_oto_request("b")).await.unwrap();
+        let at = t + Duration::minutes(5);
+        br.fill_at("ord-2", dec!(100.00), 10, at);
+        assert_eq!(br.order("ord-2").await.unwrap().filled_at, Some(at));
+
+        let d = FakeBroker::default();
+        d.submit(&sample_oto_request("c")).await.unwrap();
+        d.fill("ord-1", dec!(100.00), 10);
+        assert_eq!(
+            d.order("ord-1").await.unwrap().filled_at,
+            Some(default_fill_time())
+        );
     }
 
     #[tokio::test]
