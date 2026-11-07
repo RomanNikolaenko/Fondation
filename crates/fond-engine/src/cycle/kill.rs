@@ -417,7 +417,12 @@ async fn close_all(
     Ok((closed, had_position))
 }
 
-async fn reprotect_after_failed_sale(d: &Deps, p: &TrackedPosition) -> Result<(), CycleError> {
+/// Позицію, чий стоп уже скасовано, а продаж не відбувся, знову ставить під стоп. Збій захисту —
+/// подія в журналі, збій сховища — помилка.
+pub(crate) async fn reprotect_after_failed_sale(
+    d: &Deps,
+    p: &TrackedPosition,
+) -> Result<(), CycleError> {
     match ensure_stop(d, p).await {
         Ok(_) => Ok(()),
         Err(CycleError::Store(e)) => Err(CycleError::Store(e)),

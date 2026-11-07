@@ -1050,7 +1050,7 @@ async fn protect(
     // Решта живих стопів зайва: разом із робочим вони продали б більше, ніж є.
     let mut waiting = None;
     for old in &live {
-        match cancel_confirmed(d, old).await? {
+        match cancel_confirmed(d, &old.id).await? {
             Some(done) if done.filled_qty > 0 => {
                 return Err(CycleError::Other(format!(
                     "стоп-ордер {} виконано ({} шт.) до скасування; позицію уточнить наступна \
@@ -1132,16 +1132,19 @@ async fn protect(
         .map(Protection::Protected)
 }
 
-/// Скасовує ордер і перевіряє (до `CANCEL_CHECKS` разів), що він завершився. `None` — ще не
-/// завершився (наприклад, `pending_cancel`, який іще може виконатись).
-async fn cancel_confirmed(d: &Deps, o: &BrokerOrder) -> Result<Option<BrokerOrder>, CycleError> {
+/// Скасовує ордер `id` і перевіряє (до `CANCEL_CHECKS` разів), що він завершився. `None` — ще
+/// не завершився (наприклад, `pending_cancel`, який іще може виконатись).
+pub(crate) async fn cancel_confirmed(
+    d: &Deps,
+    id: &str,
+) -> Result<Option<BrokerOrder>, CycleError> {
     // Результат скасування не вирішальний (ордер міг уже завершитись): вирішує повторний запит.
-    let _ = observe(d, d.broker.cancel(&o.id).await);
+    let _ = observe(d, d.broker.cancel(id).await);
     for check in 0..CANCEL_CHECKS {
         if check > 0 {
             tokio::time::sleep(CANCEL_POLL).await;
         }
-        let now = observe(d, d.broker.order(&o.id).await)?;
+        let now = observe(d, d.broker.order(id).await)?;
         if now.status.is_terminal() {
             d.store.upsert_order(&now, d.clock.now()).await?;
             return Ok(Some(now));
