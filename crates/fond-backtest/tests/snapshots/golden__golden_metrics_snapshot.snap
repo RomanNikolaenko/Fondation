@@ -1,0 +1,36 @@
+---
+source: crates/fond-backtest/tests/golden.rs
+expression: round6(&r.metrics)
+---
+{
+  "benchmark": {
+    "avg_hold_days": 0.0,
+    "avg_loss": 0.0,
+    "avg_win": 0.0,
+    "cagr": 0.128675,
+    "exposure": 1.0,
+    "max_drawdown": 0.165587,
+    "max_drawdown_days": 424,
+    "profit_factor": null,
+    "sharpe": 0.88366,
+    "sortino": 1.298947,
+    "trades": 0,
+    "win_rate": 0.0
+  },
+  "full": {
+    "avg_hold_days": 9.25,
+    "avg_loss": -494.784549,
+    "avg_win": 398.744167,
+    "cagr": 0.006675,
+    "exposure": 0.857692,
+    "max_drawdown": 0.094518,
+    "max_drawdown_days": 569,
+    "profit_factor": 1.03615,
+    "sharpe": 0.139744,
+    "sortino": 0.200101,
+    "trades": 256,
+    "win_rate": 0.5625
+  },
+  "in_sample": null,
+  "out_of_sample": null
+}

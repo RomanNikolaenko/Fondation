@@ -15,5 +15,10 @@ chrono.workspace = true
 thiserror.workspace = true
 ts-rs = { workspace = true, optional = true }
 
+[dev-dependencies]
+fond-core = { path = "../fond-core", features = ["testkit"] }
+insta.workspace = true
+serde_json.workspace = true
+
 [lints]
 workspace = true
