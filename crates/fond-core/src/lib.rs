@@ -2,6 +2,7 @@
 
 pub mod error;
 pub mod ids;
+pub mod indicators;
 pub mod intent;
 pub mod orders;
 pub mod portfolio;
