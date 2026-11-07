@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use fond_core::error::BrokerError;
+use fond_core::error::{BrokerError, IsTransient};
 use fond_core::orders::{BrokerOrder, OrderClass, OrderRequest, OrderType, Side, TimeInForce};
 use fond_core::portfolio::{Account, BrokerPosition};
 use fond_core::traits::{Broker, Clock};
@@ -56,7 +56,7 @@ impl fmt::Debug for AlpacaConfig {
 pub struct AlpacaClient {
     http: reqwest::Client,
     cfg: AlpacaConfig,
-    _clock: Arc<dyn Clock>,
+    clock: Arc<dyn Clock>,
     limiter: RateLimiter,
     retry: RetryPolicy,
 }
@@ -66,34 +66,39 @@ impl AlpacaClient {
         Self {
             http: http_client(Duration::from_secs(15)),
             cfg,
-            _clock: clock,
+            clock,
             limiter: RateLimiter::new(190),
             retry: RetryPolicy::default(),
         }
     }
 
     fn url(&self, path: &str, query: &[(&str, &str)]) -> Result<Url, BrokerError> {
-        let base = self.cfg.trading_base.as_str().trim_end_matches('/');
-        let mut url = Url::parse(&format!("{base}/{path}"))
-            .map_err(|e| BrokerError::Other(format!("bad url: {e}")))?;
-        if !query.is_empty() {
-            url.query_pairs_mut().extend_pairs(query);
-        }
-        Ok(url)
+        join_url(&self.cfg.trading_base, path, query).map_err(BrokerError::Other)
     }
 
-    /// Одна спроба запиту; повертає тіло успішної відповіді або відображену помилку.
-    async fn send_once(
+    pub(super) fn trading_base(&self) -> &Url {
+        &self.cfg.trading_base
+    }
+
+    pub(super) fn data_base(&self) -> &Url {
+        &self.cfg.data_base
+    }
+
+    pub(super) fn now(&self) -> chrono::DateTime<chrono::Utc> {
+        self.clock.now()
+    }
+
+    /// Одна спроба запиту до готового URL; повертає тіло успішної відповіді.
+    pub(super) async fn exec(
         &self,
         method: Method,
-        path: &str,
-        query: &[(&str, &str)],
+        url: Url,
         body: Option<&Value>,
-    ) -> Result<(StatusCode, String), BrokerError> {
+    ) -> Result<String, RawError> {
         self.limiter.acquire().await;
         let mut req = self
             .http
-            .request(method, self.url(path, query)?)
+            .request(method, url)
             .header("APCA-API-KEY-ID", self.cfg.key_id.expose())
             .header("APCA-API-SECRET-KEY", self.cfg.secret.expose());
         if let Some(b) = body {
@@ -102,17 +107,36 @@ impl AlpacaClient {
         let resp = req
             .send()
             .await
-            .map_err(|e| BrokerError::Transient(format!("request failed: {e}")))?;
+            .map_err(|e| RawError::Network(format!("request failed: {e}")))?;
         let status = resp.status();
         let text = resp
             .text()
             .await
-            .map_err(|e| BrokerError::Transient(format!("reading body failed: {e}")))?;
+            .map_err(|e| RawError::Network(format!("reading body failed: {e}")))?;
         if status.is_success() {
-            Ok((status, text))
+            Ok(text)
         } else {
-            Err(map_error(status, &text))
+            Err(RawError::Status(status, text))
         }
+    }
+
+    /// GET з повторами для тимчасових збоїв; помилку відображає виклик.
+    pub(super) async fn get_raw(&self, url: &Url) -> Result<String, RawError> {
+        with_retry(&self.retry, || self.exec(Method::GET, url.clone(), None)).await
+    }
+
+    async fn send_once(
+        &self,
+        method: Method,
+        path: &str,
+        query: &[(&str, &str)],
+        body: Option<&Value>,
+    ) -> Result<(StatusCode, String), BrokerError> {
+        let text = self
+            .exec(method, self.url(path, query)?, body)
+            .await
+            .map_err(RawError::into_broker)?;
+        Ok((StatusCode::OK, text))
     }
 
     async fn get<T: DeserializeOwned>(
@@ -120,10 +144,10 @@ impl AlpacaClient {
         path: &str,
         query: &[(&str, &str)],
     ) -> Result<T, BrokerError> {
-        let (_, text) = with_retry(&self.retry, || {
-            self.send_once(Method::GET, path, query, None)
-        })
-        .await?;
+        let text = self
+            .get_raw(&self.url(path, query)?)
+            .await
+            .map_err(RawError::into_broker)?;
         parse(&text)
     }
 
@@ -136,6 +160,44 @@ impl AlpacaClient {
         let (_, text) = self.send_once(method, path, &[], Some(body)).await?;
         parse(&text)
     }
+}
+
+/// Збій одного HTTP-запиту до відображення у доменну помилку.
+#[derive(Debug)]
+pub(super) enum RawError {
+    Network(String),
+    Status(StatusCode, String),
+}
+
+impl IsTransient for RawError {
+    fn is_transient(&self) -> bool {
+        match self {
+            Self::Network(_) => true,
+            Self::Status(s, _) => s.as_u16() == 429 || s.is_server_error(),
+        }
+    }
+}
+
+impl RawError {
+    fn into_broker(self) -> BrokerError {
+        match self {
+            Self::Network(m) => BrokerError::Transient(m),
+            Self::Status(s, t) => map_error(s, &t),
+        }
+    }
+}
+
+pub(super) fn join_url(base: &Url, path: &str, query: &[(&str, &str)]) -> Result<Url, String> {
+    let b = base.as_str().trim_end_matches('/');
+    let mut url = Url::parse(&format!("{b}/{path}")).map_err(|e| format!("bad url: {e}"))?;
+    if !query.is_empty() {
+        url.query_pairs_mut().extend_pairs(query);
+    }
+    Ok(url)
+}
+
+pub(super) fn message_text(text: &str) -> String {
+    message_of(text)
 }
 
 fn parse<T: DeserializeOwned>(text: &str) -> Result<T, BrokerError> {
