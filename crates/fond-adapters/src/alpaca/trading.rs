@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use fond_core::error::{BrokerError, IsTransient};
+use fond_core::error::BrokerError;
 use fond_core::orders::{BrokerOrder, OrderClass, OrderRequest, OrderType, Side, TimeInForce};
 use fond_core::portfolio::{Account, BrokerPosition};
 use fond_core::traits::{Broker, Clock};
@@ -17,7 +17,9 @@ use serde_json::{Map, Value, json};
 use url::Url;
 
 use super::models::{WireAccount, WireOrder, WirePosition};
-use crate::http::{RateLimiter, RetryPolicy, Secret, http_client, with_retry};
+use crate::http::{
+    RateLimiter, RawError, RetryPolicy, Secret, http_client, join_url, send, with_retry,
+};
 
 const PAPER_TRADING: &str = "https://paper-api.alpaca.markets";
 const DATA: &str = "https://data.alpaca.markets";
@@ -95,29 +97,11 @@ impl AlpacaClient {
         url: Url,
         body: Option<&Value>,
     ) -> Result<String, RawError> {
-        self.limiter.acquire().await;
-        let mut req = self
-            .http
-            .request(method, url)
-            .header("APCA-API-KEY-ID", self.cfg.key_id.expose())
-            .header("APCA-API-SECRET-KEY", self.cfg.secret.expose());
-        if let Some(b) = body {
-            req = req.json(b);
-        }
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| RawError::Network(format!("request failed: {e}")))?;
-        let status = resp.status();
-        let text = resp
-            .text()
-            .await
-            .map_err(|e| RawError::Network(format!("reading body failed: {e}")))?;
-        if status.is_success() {
-            Ok(text)
-        } else {
-            Err(RawError::Status(status, text))
-        }
+        let headers = [
+            ("APCA-API-KEY-ID", self.cfg.key_id.expose()),
+            ("APCA-API-SECRET-KEY", self.cfg.secret.expose()),
+        ];
+        send(&self.http, &self.limiter, method, url, &headers, body).await
     }
 
     /// GET з повторами для тимчасових збоїв; помилку відображає виклик.
@@ -135,7 +119,7 @@ impl AlpacaClient {
         let text = self
             .exec(method, self.url(path, query)?, body)
             .await
-            .map_err(RawError::into_broker)?;
+            .map_err(into_broker)?;
         Ok((StatusCode::OK, text))
     }
 
@@ -147,7 +131,7 @@ impl AlpacaClient {
         let text = self
             .get_raw(&self.url(path, query)?)
             .await
-            .map_err(RawError::into_broker)?;
+            .map_err(into_broker)?;
         parse(&text)
     }
 
@@ -162,38 +146,11 @@ impl AlpacaClient {
     }
 }
 
-/// Збій одного HTTP-запиту до відображення у доменну помилку.
-#[derive(Debug)]
-pub(super) enum RawError {
-    Network(String),
-    Status(StatusCode, String),
-}
-
-impl IsTransient for RawError {
-    fn is_transient(&self) -> bool {
-        match self {
-            Self::Network(_) => true,
-            Self::Status(s, _) => s.as_u16() == 429 || s.is_server_error(),
-        }
+fn into_broker(e: RawError) -> BrokerError {
+    match e {
+        RawError::Network(m) => BrokerError::Transient(m),
+        RawError::Status(s, t) => map_error(s, &t),
     }
-}
-
-impl RawError {
-    fn into_broker(self) -> BrokerError {
-        match self {
-            Self::Network(m) => BrokerError::Transient(m),
-            Self::Status(s, t) => map_error(s, &t),
-        }
-    }
-}
-
-pub(super) fn join_url(base: &Url, path: &str, query: &[(&str, &str)]) -> Result<Url, String> {
-    let b = base.as_str().trim_end_matches('/');
-    let mut url = Url::parse(&format!("{b}/{path}")).map_err(|e| format!("bad url: {e}"))?;
-    if !query.is_empty() {
-        url.query_pairs_mut().extend_pairs(query);
-    }
-    Ok(url)
 }
 
 pub(super) fn message_text(text: &str) -> String {

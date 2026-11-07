@@ -1,11 +1,14 @@
 //! Спільні HTTP-утиліти: маскований секрет, повтори, ліміт запитів, клієнт.
 
 use fond_core::error::IsTransient;
+use reqwest::{Method, StatusCode};
+use serde_json::Value;
 use std::fmt;
 use std::future::Future;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time::Instant;
+use url::Url;
 
 /// Секретне значення. `Debug`/`Display` показують лише `****` і останні 4 символи.
 #[derive(Clone)]
@@ -134,6 +137,66 @@ pub fn http_client(timeout: Duration) -> reqwest::Client {
         .user_agent("fond/0.1")
         .build()
         .expect("reqwest client with rustls and a static user agent always builds")
+}
+
+/// Збій одного HTTP-запиту до відображення у доменну помилку.
+#[derive(Debug)]
+pub enum RawError {
+    Network(String),
+    Status(StatusCode, String),
+}
+
+impl IsTransient for RawError {
+    fn is_transient(&self) -> bool {
+        match self {
+            Self::Network(_) => true,
+            Self::Status(s, _) => s.as_u16() == 429 || s.is_server_error(),
+        }
+    }
+}
+
+/// Одна спроба запиту: ліміт частоти, заголовки, необов'язкове JSON-тіло. Повертає тіло
+/// успішної відповіді; мережеві збої й не-2xx статуси розрізняє `RawError`. Повідомлення
+/// про мережевий збій не містить URL, тож секрети з query не потрапляють у помилку.
+pub async fn send(
+    http: &reqwest::Client,
+    limiter: &RateLimiter,
+    method: Method,
+    url: Url,
+    headers: &[(&str, &str)],
+    body: Option<&Value>,
+) -> Result<String, RawError> {
+    limiter.acquire().await;
+    let mut req = http.request(method, url);
+    for (k, v) in headers {
+        req = req.header(*k, *v);
+    }
+    if let Some(b) = body {
+        req = req.json(b);
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| RawError::Network(format!("request failed: {}", e.without_url())))?;
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| RawError::Network(format!("reading body failed: {}", e.without_url())))?;
+    if status.is_success() {
+        Ok(text)
+    } else {
+        Err(RawError::Status(status, text))
+    }
+}
+
+pub fn join_url(base: &Url, path: &str, query: &[(&str, &str)]) -> Result<Url, String> {
+    let b = base.as_str().trim_end_matches('/');
+    let mut url = Url::parse(&format!("{b}/{path}")).map_err(|e| format!("bad url: {e}"))?;
+    if !query.is_empty() {
+        url.query_pairs_mut().extend_pairs(query);
+    }
+    Ok(url)
 }
 
 #[cfg(test)]

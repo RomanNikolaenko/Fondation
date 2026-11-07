@@ -14,7 +14,8 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use url::Url;
 
-use super::trading::{AlpacaClient, RawError, join_url, message_text};
+use super::trading::{AlpacaClient, message_text};
+use crate::http::{RawError, join_url};
 
 const BATCH: usize = 100;
 const NEWS_MAX_LIMIT: usize = 50;
