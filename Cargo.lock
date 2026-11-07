@@ -1497,6 +1497,7 @@ dependencies = [
 name = "fond-engine"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "clap",
  "dirs",
@@ -1507,6 +1508,8 @@ dependencies = [
  "fond-store",
  "fond-strategies",
  "fs4",
+ "rust_decimal",
+ "rust_decimal_macros",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",

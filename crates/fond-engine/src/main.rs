@@ -1,4 +1,13 @@
 mod config_io;
+// Кроки циклу, залежності й шину подій підключає runtime у Task 21.
+#[allow(dead_code, reason = "споживач (runtime) з'являється в Task 21")]
+mod cycle;
+#[allow(dead_code, reason = "споживач (runtime) з'являється в Task 21")]
+mod deps;
+#[allow(dead_code, reason = "споживач (runtime) з'являється в Task 21")]
+mod events;
+#[allow(dead_code, reason = "споживач (runtime) з'являється в Task 21")]
+mod health;
 mod lock;
 mod logging;
 mod paths;
