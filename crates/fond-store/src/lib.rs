@@ -1,9 +1,11 @@
 //! SQLite (`sqlx`), міграції, репозиторії.
 
+mod backtests;
 mod bars;
 mod cycle;
 mod events;
 mod state;
+mod trading;
 mod universe;
 
 use std::path::Path;
@@ -15,8 +17,10 @@ use fond_core::intent::IntentStatus;
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 
+pub use backtests::{BacktestRow, BacktestStatus};
 pub use cycle::{StepName, StepStatus};
 pub use events::{EventKind, EventQuery, NewEvent, StoredEvent};
+pub use trading::{EquityKind, EquitySnapshot, SignalRecord, SignalStatus};
 pub use universe::{ETFS_CSV, SP500_CSV, UniverseEntry, UniverseSource, parse_universe_csv};
 
 #[derive(Debug, thiserror::Error)]
@@ -30,6 +34,8 @@ pub enum StoreError {
         from: IntentStatus,
         to: IntentStatus,
     },
+    #[error("не знайдено: {0}")]
+    NotFound(String),
     #[error("пошкоджені дані: {0}")]
     Corrupt(String),
 }
