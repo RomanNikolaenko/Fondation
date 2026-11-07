@@ -1,10 +1,13 @@
 //! Звірка з брокером (щогодини під час сесії): виконання відправлених намірів, захисні стопи,
 //! розбіжності позицій і внутрішньоденний знімок капіталу.
 //!
-//! Брокер — джерело правди про ордери. Звірка ідемпотентна: повторний прогін після збою чи
-//! перезапуску доводить стан до того самого результату й не дублює ордерів.
+//! Брокер — джерело правди про ордери й позиції. Звірка ідемпотентна: повторний прогін після
+//! збою чи перезапуску доводить стан до того самого результату й не дублює ордерів. Рушій лише
+//! купує, тому захисні Sell Stop ніколи не подаються й не беруться понад обсяг, що є у брокера,
+//! а після закриття позиції решта її продажів скасовується.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::time::Duration;
 
 use fond_api::events::EngineEventDto;
 use fond_core::calendar::utc_to_et;
@@ -14,7 +17,7 @@ use fond_core::intent::{Intent, IntentKind, IntentStatus};
 use fond_core::orders::{
     BrokerOrder, OrderClass, OrderRequest, OrderStatus, OrderType, Side, TimeInForce,
 };
-use fond_core::portfolio::{BrokerPosition, Position, TrackedPosition};
+use fond_core::portfolio::{Position, TrackedPosition};
 use fond_core::price::{to_f64, to_price};
 use fond_core::types::Symbol;
 use fond_store::{EquityKind, EquitySnapshot, EventKind};
@@ -25,6 +28,14 @@ use super::analysis::sector_of;
 use super::kill::pause_changed;
 use super::{CycleError, journal};
 use crate::deps::Deps;
+
+/// Скільки разів перевіряється, що скасований стоп завершився.
+const CANCEL_CHECKS: usize = 3;
+/// Пауза між перевірками скасування.
+#[cfg(not(test))]
+const CANCEL_POLL: Duration = Duration::from_secs(1);
+#[cfg(test)]
+const CANCEL_POLL: Duration = Duration::from_millis(5);
 
 /// Розбіжність між відстежуваними позиціями й позиціями брокера.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,15 +178,38 @@ fn stop_leg(o: &BrokerOrder) -> Option<&BrokerOrder> {
     })
 }
 
-/// Робочий захисний стоп позиції: відкритий Sell Stop на весь її обсяг. Нога, що ще
-/// утримується (`Held`, батьківський ордер не виконано), нічого не захищає.
-fn protects(o: &BrokerOrder, p: &TrackedPosition) -> bool {
-    o.symbol == p.position.symbol
-        && o.side == Side::Sell
-        && o.order_type == OrderType::Stop
-        && o.status.is_open()
-        && o.status != OrderStatus::Held
-        && o.qty == p.position.qty
+fn is_sell_stop(o: &BrokerOrder, sym: &Symbol) -> bool {
+    o.symbol == *sym && o.side == Side::Sell && o.order_type == OrderType::Stop
+}
+
+/// Робочий захисний стоп на `qty` шт.: відкритий і не `Held` (нога, що чекає виконання
+/// батьківського ордера, нічого не захищає).
+fn working(o: &BrokerOrder, sym: &Symbol, qty: u32) -> bool {
+    is_sell_stop(o, sym) && o.status.is_open() && o.status != OrderStatus::Held && o.qty == qty
+}
+
+/// Обсяг тікера, який уже продають інші відкриті ордери: верхньорівневі продажі, що не є
+/// стопами (вихід, аварійне закриття, ручний ордер). Ноги-цілі (OCO зі стопом) не рахуються.
+fn reserved_qty(orders: &[WithParent<'_>], sym: &Symbol) -> i64 {
+    orders
+        .iter()
+        .filter(|(o, parent)| {
+            parent.is_none()
+                && o.symbol == *sym
+                && o.side == Side::Sell
+                && o.order_type != OrderType::Stop
+                && !o.status.is_terminal()
+                && o.status != OrderStatus::Held
+        })
+        .map(|(o, _)| i64::from(o.qty.saturating_sub(o.filled_qty)))
+        .sum()
+}
+
+/// Скільки акцій захищати стопом: не більше відстежуваного обсягу й не більше, ніж у брокера
+/// лишається після інших відкритих продажів.
+fn target_qty(tracked: u32, held: i64, reserved: i64) -> u32 {
+    let free = (held - reserved).max(0);
+    u32::try_from(free).map_or(tracked, |f| f.min(tracked))
 }
 
 /// Залишок позиції після продажу `sold` шт. ордером на `planned` шт. Якщо позицію вже
@@ -198,12 +232,22 @@ fn with_qty(p: &TrackedPosition, qty: u32) -> TrackedPosition {
     }
 }
 
+fn bump(map: &mut HashMap<Symbol, i64>, s: &Symbol, delta: i64) {
+    *map.entry(s.clone()).or_default() += delta;
+}
+
 /// Стан одного прогону звірки.
 #[derive(Default)]
 struct Pass {
     report: ReconcileReport,
-    /// Зміна позиції брокера від ще відкритих, але вже частково виконаних ордерів.
+    /// Позиції брокера на початку звірки.
+    held: HashMap<Symbol, i64>,
+    /// Зміна позиції від ще відкритих, але вже частково виконаних ордерів.
     inflight: HashMap<Symbol, i64>,
+    /// Купівлі й продажі, побачені в цій звірці: знімок позицій зроблено раніше, тож він міг
+    /// їх ще не врахувати.
+    bought: HashMap<Symbol, i64>,
+    sold: HashMap<Symbol, i64>,
     /// Позиції, чий стоп у кроці 2 не перевіряється: відкритий вихід або вже оброблені.
     skip_stop_check: HashSet<Symbol>,
     /// Тікери з невідомим станом (запит до брокера не вдався): не порівнюються.
@@ -211,18 +255,32 @@ struct Pass {
 }
 
 impl Pass {
-    fn add_inflight(&mut self, s: &Symbol, delta: i64) {
-        *self.inflight.entry(s.clone()).or_default() += delta;
+    fn held(&self, s: &Symbol) -> i64 {
+        self.held.get(s).copied().unwrap_or(0)
     }
 }
 
-/// Звірка: (1) відправлені входи й виходи, (2) стопи позицій без відкритого виходу,
-/// (3) порівняння з позиціями брокера — розбіжність ставить паузу, (4) знімок капіталу.
+/// Звірка: знімок позицій брокера, далі (1) відправлені входи й виходи, (2) стопи позицій без
+/// відкритого виходу, (3) порівняння зі знімком — розбіжність ставить паузу, (4) знімок
+/// капіталу.
 ///
 /// Збій запиту по окремому наміру чи стопу записується в журнал, і звірка йде далі;
 /// збій отримання позицій чи рахунку перериває її (`CycleError::Broker`).
 pub async fn reconcile(d: &Deps) -> Result<ReconcileReport, CycleError> {
-    let mut pass = Pass::default();
+    let positions = match observe(d, d.broker.positions().await) {
+        Ok(p) => p,
+        Err(e) => {
+            return broker_failure(d, "Звірку перервано: не вдалося отримати позиції", e).await;
+        }
+    };
+    let mut pass = Pass {
+        held: positions
+            .iter()
+            .filter(|p| p.qty != 0)
+            .map(|p| (p.symbol.clone(), p.qty))
+            .collect(),
+        ..Pass::default()
+    };
 
     // 1. Підтягування стопа (MoveStop) завершує крок відправки, тут — лише входи й виходи.
     for intent in d
@@ -247,13 +305,7 @@ pub async fn reconcile(d: &Deps) -> Result<ReconcileReport, CycleError> {
 
     // 3.
     let tracked = d.store.positions().await?;
-    let broker = match observe(d, d.broker.positions().await) {
-        Ok(p) => p,
-        Err(e) => {
-            return broker_failure(d, "Звірку перервано: не вдалося отримати позиції", e).await;
-        }
-    };
-    let mismatches = compare(&tracked, &broker, &pass);
+    let mismatches = compare(&tracked, &pass);
     if !mismatches.is_empty() {
         let details: Vec<String> = mismatches.iter().map(Mismatch::describe).collect();
         let reason = format!("Розбіжність з брокером: {}", details.join("; "));
@@ -294,40 +346,35 @@ pub async fn reconcile(d: &Deps) -> Result<ReconcileReport, CycleError> {
     Ok(pass.report)
 }
 
-/// Розбіжності за кількістю. Очікувана позиція брокера — відстежувана плюс часткові
-/// виконання ще відкритих ордерів; тікери з невідомим станом пропускаються.
-fn compare(tracked: &[TrackedPosition], broker: &[BrokerPosition], pass: &Pass) -> Vec<Mismatch> {
+/// Розбіжності за кількістю зі знімком позицій. Очікувано: відстежувана позиція плюс часткові
+/// виконання ще відкритих ордерів. Знімок зроблено до запитів ордерів, тож відхилення в
+/// межах побачених у цій звірці купівель (менше) і продажів (більше) допускається — точне
+/// порівняння повторить наступна звірка. Тікери з невідомим станом пропускаються.
+fn compare(tracked: &[TrackedPosition], pass: &Pass) -> Vec<Mismatch> {
     let local: BTreeMap<&Symbol, u32> = tracked
         .iter()
         .map(|p| (&p.position.symbol, p.position.qty))
         .collect();
-    let remote: BTreeMap<&Symbol, i64> = broker
-        .iter()
-        .filter(|p| p.qty != 0)
-        .map(|p| (&p.symbol, p.qty))
-        .collect();
-    let symbols: BTreeSet<&Symbol> = local.keys().chain(remote.keys()).copied().collect();
+    let symbols: BTreeSet<&Symbol> = local.keys().copied().chain(pass.held.keys()).collect();
+    let get = |m: &HashMap<Symbol, i64>, s: &Symbol| m.get(s).copied().unwrap_or(0);
     let mut out = Vec::new();
     for s in symbols.into_iter().filter(|s| !pass.uncertain.contains(*s)) {
-        let delta = pass.inflight.get(s).copied().unwrap_or(0);
+        let expected = local.get(s).copied().map_or(0, i64::from) + get(&pass.inflight, s);
+        let broker = pass.held(s);
+        if broker >= expected - get(&pass.bought, s) && broker <= expected + get(&pass.sold, s) {
+            continue;
+        }
         let symbol = s.clone();
-        let found = match (local.get(s).copied(), remote.get(s).copied()) {
-            (Some(local), Some(broker)) if i64::from(local) + delta != broker => {
-                Some(Mismatch::QtyDiffers {
-                    symbol,
-                    local,
-                    broker,
-                })
-            }
-            (Some(local), None) if i64::from(local) + delta != 0 => {
-                Some(Mismatch::MissingBrokerPosition { symbol })
-            }
-            (None, Some(qty)) if qty != delta => {
-                Some(Mismatch::UnknownBrokerPosition { symbol, qty })
-            }
-            _ => None,
-        };
-        out.extend(found);
+        match (local.get(s).copied(), broker) {
+            (Some(_), 0) => out.push(Mismatch::MissingBrokerPosition { symbol }),
+            (Some(local), broker) => out.push(Mismatch::QtyDiffers {
+                symbol,
+                local,
+                broker,
+            }),
+            (None, 0) => {}
+            (None, qty) => out.push(Mismatch::UnknownBrokerPosition { symbol, qty }),
+        }
     }
     out
 }
@@ -436,10 +483,10 @@ async fn entry_order(
         return Ok(());
     };
     let sym = &intent.symbol;
+    let filled = i64::from(order.filled_qty);
+    bump(&mut pass.bought, sym, filled);
     if !order.status.is_terminal() {
-        if order.filled_qty > 0 {
-            pass.add_inflight(sym, i64::from(order.filled_qty));
-        }
+        bump(&mut pass.inflight, sym, filled);
         return Ok(());
     }
     let now = d.clock.now();
@@ -515,6 +562,10 @@ async fn entry_order(
     // Позиція зберігається раніше за позначку наміру: збій посередині не губить виконання.
     d.store.upsert_position(&tp, now).await?;
     pass.skip_stop_check.insert(sym.clone());
+    if order.filled_qty < order.qty {
+        // Ноги розраховані на весь ордер: ціль (OCO зі стопом) продала б більше, ніж куплено.
+        cancel_target_legs(d, order, &intent.id).await?;
+    }
     reprotect(d, &tp, leg, pass).await?;
     d.store
         .update_intent(&intent.id, IntentStatus::Filled, now, Some(&order.id), None)
@@ -552,6 +603,43 @@ async fn entry_order(
     Ok(())
 }
 
+/// Скасовує відкриті ноги-продажі входу, крім стопа (стоп замінює `ensure_stop`).
+async fn cancel_target_legs(
+    d: &Deps,
+    order: &BrokerOrder,
+    intent_id: &str,
+) -> Result<(), CycleError> {
+    let legs = flatten(std::slice::from_ref(order));
+    for (leg, _) in legs.into_iter().skip(1) {
+        if leg.side != Side::Sell || leg.order_type == OrderType::Stop || !leg.status.is_open() {
+            continue;
+        }
+        let (kind, message) = match observe(d, d.broker.cancel(&leg.id).await) {
+            Ok(()) => (
+                EventKind::Order,
+                format!(
+                    "Ціль {} скасовано: вхід виконано частково ({} з {} шт.)",
+                    leg.id, order.filled_qty, order.qty
+                ),
+            ),
+            Err(e) => (
+                EventKind::Error,
+                format!("Не вдалося скасувати ціль {}: {e}", leg.id),
+            ),
+        };
+        journal(
+            d,
+            kind,
+            Some(&leg.symbol),
+            Some(intent_id),
+            message,
+            json!({ "order_id": leg.id }),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 async fn exit_order(
     d: &Deps,
     intent: &Intent,
@@ -560,12 +648,12 @@ async fn exit_order(
     pass: &mut Pass,
 ) -> Result<(), CycleError> {
     let sym = &intent.symbol;
+    let sold = order.filled_qty;
+    bump(&mut pass.sold, sym, i64::from(sold));
     if !order.status.is_terminal() {
         // Вихід ще виконується: стоп не відновлюється, щоб не задвоїти продаж.
         pass.skip_stop_check.insert(sym.clone());
-        if order.filled_qty > 0 {
-            pass.add_inflight(sym, -i64::from(order.filled_qty));
-        }
+        bump(&mut pass.inflight, sym, -i64::from(sold));
         return Ok(());
     }
     let now = d.clock.now();
@@ -575,7 +663,7 @@ async fn exit_order(
         .await?
         .into_iter()
         .find(|p| p.position.symbol == *sym);
-    if order.filled_qty == 0 {
+    if sold == 0 {
         let why = "Вихід не виконано";
         d.store
             .update_intent(
@@ -602,15 +690,15 @@ async fn exit_order(
         return Ok(());
     }
 
-    let sold = order.filled_qty;
     if let Some(tp) = held {
+        pass.skip_stop_check.insert(sym.clone());
         let remaining = remaining_after_sale(tp.position.qty, sold, planned);
         if remaining == 0 {
             d.store.remove_position(sym).await?;
+            cancel_open_sells(d, sym).await?;
         } else {
             let rest = with_qty(&tp, remaining);
             d.store.upsert_position(&rest, now).await?;
-            pass.skip_stop_check.insert(sym.clone());
             reprotect(d, &rest, None, pass).await?;
         }
     }
@@ -637,12 +725,11 @@ async fn exit_order(
     Ok(())
 }
 
-/// Крок 2 для однієї позиції: стан її стоп-ордера.
+/// Крок 2 для однієї позиції: стан її стоп-ордера й позиції у брокера.
 async fn check_stop(d: &Deps, tp: &TrackedPosition, pass: &mut Pass) -> Result<(), CycleError> {
     let sym = &tp.position.symbol;
     let stop = match current_stop(d, tp, None).await {
-        Ok(Some(o)) => o,
-        Ok(None) => return reprotect(d, tp, None, pass).await,
+        Ok(stop) => stop,
         Err(e) => {
             let id = tp.stop_order_id.as_deref().unwrap_or_default();
             journal(
@@ -658,41 +745,66 @@ async fn check_stop(d: &Deps, tp: &TrackedPosition, pass: &mut Pass) -> Result<(
             return Ok(());
         }
     };
-    d.store.upsert_order(&stop, d.clock.now()).await?;
-    pass.report.orders_updated += 1;
+    if let Some(stop) = &stop {
+        d.store.upsert_order(stop, d.clock.now()).await?;
+        pass.report.orders_updated += 1;
+        if stop.status.is_terminal() && stop.filled_qty > 0 {
+            return stop_filled(d, tp, stop, pass).await;
+        }
+    }
+    let held = pass.held(sym);
+    if held <= 0 {
+        // Позицію закрито у брокера (ціль, продаж повз рушій): захищати нічого.
+        return close_flat(d, tp, pass).await;
+    }
+    let Some(stop) = stop else {
+        return reprotect(d, tp, None, pass).await;
+    };
     if stop.status.is_open() {
         if stop.filled_qty > 0 {
             // Стоп саме виконується: позицію уточнить наступна звірка.
-            pass.add_inflight(sym, -i64::from(stop.filled_qty));
+            let filled = i64::from(stop.filled_qty);
+            bump(&mut pass.inflight, sym, -filled);
+            bump(&mut pass.sold, sym, filled);
             return Ok(());
         }
-        if protects(&stop, tp) {
+        if working(&stop, sym, target_qty(tp.position.qty, held, 0)) {
             return Ok(());
         }
         return reprotect(d, tp, Some(&stop), pass).await;
     }
     if !stop.status.is_terminal() {
-        // Невідомий стан брокера: нічого не змінюється до наступної звірки.
+        // Невідомий стан (наприклад, `pending_cancel`): нічого не змінюється до наступної
+        // звірки — ні нового стопа, ні порівняння.
         pass.uncertain.insert(sym.clone());
         return Ok(());
     }
-    if stop.filled_qty == 0 {
-        return reprotect(d, tp, Some(&stop), pass).await;
-    }
+    reprotect(d, tp, Some(&stop), pass).await
+}
 
+/// Стоп виконано (повністю або частково, далі не виконується).
+async fn stop_filled(
+    d: &Deps,
+    tp: &TrackedPosition,
+    stop: &BrokerOrder,
+    pass: &mut Pass,
+) -> Result<(), CycleError> {
+    let sym = &tp.position.symbol;
     let sold = stop.filled_qty;
+    bump(&mut pass.sold, sym, i64::from(sold));
     let remaining = remaining_after_sale(tp.position.qty, sold, stop.qty);
+    let closed = remaining == 0 || pass.held(sym) <= 0;
     let rest = with_qty(tp, remaining);
-    if remaining == 0 {
+    if closed {
         d.store.remove_position(sym).await?;
     } else {
         d.store.upsert_position(&rest, d.clock.now()).await?;
     }
     let price = price_text(stop.filled_avg_price);
-    let tail = if remaining > 0 {
-        format!(", залишок {remaining} шт.")
-    } else {
+    let tail = if closed {
         String::new()
+    } else {
+        format!(", залишок {remaining} шт.")
     };
     journal(
         d,
@@ -710,8 +822,80 @@ async fn check_stop(d: &Deps, tp: &TrackedPosition, pass: &mut Pass) -> Result<(
         });
         pass.report.stops_hit.push(sym.clone());
     }
-    if remaining > 0 {
-        reprotect(d, &rest, Some(&stop), pass).await?;
+    if closed {
+        cancel_open_sells(d, sym).await
+    } else {
+        reprotect(d, &rest, Some(stop), pass).await
+    }
+}
+
+/// Позиції у брокера більше немає: відстеження знімається, решта продажів тікера
+/// скасовується, щоб жоден не відкрив шорт.
+async fn close_flat(d: &Deps, tp: &TrackedPosition, pass: &mut Pass) -> Result<(), CycleError> {
+    let sym = &tp.position.symbol;
+    d.store.remove_position(sym).await?;
+    journal(
+        d,
+        EventKind::Fill,
+        Some(sym),
+        Some(&tp.intent_id),
+        format!(
+            "Позицію {sym} закрито у брокера ({} шт.): відстеження знято",
+            tp.position.qty
+        ),
+        json!({ "qty": tp.position.qty, "stop_order_id": tp.stop_order_id }),
+    )
+    .await?;
+    cancel_open_sells(d, sym).await?;
+    pass.report.exits_filled.push(sym.clone());
+    Ok(())
+}
+
+/// Скасовує відкриті продажі тікера, чия позиція закрита. Ноги ще відкритого батьківського
+/// ордера (новий вхід) не чіпаються. Невдача — подія в журналі, не помилка.
+async fn cancel_open_sells(d: &Deps, sym: &Symbol) -> Result<(), CycleError> {
+    let open = match observe(d, d.broker.open_orders().await) {
+        Ok(o) => o,
+        Err(e) => {
+            journal(
+                d,
+                EventKind::Error,
+                Some(sym),
+                None,
+                format!("Не вдалося перевірити відкриті продажі {sym}: {e}"),
+                json!({ "error": e.to_string() }),
+            )
+            .await?;
+            return Ok(());
+        }
+    };
+    for (o, parent) in flatten(&open) {
+        if o.symbol != *sym
+            || o.side != Side::Sell
+            || !o.status.is_open()
+            || parent.is_some_and(|p| p.status.is_open())
+        {
+            continue;
+        }
+        let (kind, message) = match observe(d, d.broker.cancel(&o.id).await) {
+            Ok(()) => (
+                EventKind::Order,
+                format!("Скасовано продаж {} ({sym}): позицію закрито", o.id),
+            ),
+            Err(e) => (
+                EventKind::Error,
+                format!("Не вдалося скасувати продаж {} ({sym}): {e}", o.id),
+            ),
+        };
+        journal(
+            d,
+            kind,
+            Some(sym),
+            None,
+            message,
+            json!({ "order_id": o.id }),
+        )
+        .await?;
     }
     Ok(())
 }
@@ -736,8 +920,8 @@ async fn current_stop(
     }
 }
 
-/// `ensure_stop` усередині звірки: збій захисту не перериває звірку (подія в журналі,
-/// наступна звірка повторить), збій сховища — перериває.
+/// `ensure_stop` усередині звірки (обсяг брокера — зі знімку): збій захисту не перериває
+/// звірку (подія в журналі, наступна звірка повторить), збій сховища — перериває.
 async fn reprotect(
     d: &Deps,
     tp: &TrackedPosition,
@@ -746,16 +930,18 @@ async fn reprotect(
 ) -> Result<(), CycleError> {
     let sym = &tp.position.symbol;
     let result = match current_stop(d, tp, known).await {
-        Ok(current) => protect(d, tp, current).await,
+        Ok(current) => protect(d, tp, current, pass.held(sym)).await,
         Err(e) => Err(e.into()),
     };
     match result {
-        Ok(updated) => {
+        Ok(Protection::Protected(updated)) => {
             if updated.stop_order_id != tp.stop_order_id {
                 pass.report.reprotected.push(sym.clone());
             }
             Ok(())
         }
+        // Обидва випадки вже в журналі.
+        Ok(Protection::Covered | Protection::Waiting(_)) => Ok(()),
         Err(CycleError::Store(e)) => Err(CycleError::Store(e)),
         Err(e) => {
             journal(
@@ -771,43 +957,136 @@ async fn reprotect(
     }
 }
 
-/// Гарантує робочий захисний стоп (Sell Stop GTC) на весь обсяг позиції.
+/// Гарантує робочий захисний стоп (Sell Stop GTC) на позицію — на обсяг, що є у брокера й не
+/// продається іншими відкритими ордерами (не більше відстежуваного).
 ///
-/// Чинний стоп лишається як є. Інакше береться відкритий Sell Stop на той самий тікер і
-/// обсяг, поданий раніше (зокрема до перезапуску). Лише коли такого немає, застарілий стоп
-/// (інший обсяг або ще утримується) скасовується й подається новий з
-/// `client_order_id("{intent_id}-protect-{unix}")`; на дубль ордер шукається за цим id.
-/// Позиція з новим `stop_order_id` зберігається, у журналі — «Стоп відновлено».
+/// Чинний стоп лишається як є. Інакше береться відкритий Sell Stop на той самий тікер і обсяг,
+/// поданий раніше (зокрема до перезапуску). Усі інші живі стопи тікера скасовуються; новий
+/// подається з `client_order_id("{intent_id}-protect-{unix}")`, лише коли кожен старий
+/// завершився (на дубль ордер шукається за цим id). Позиція з новим `stop_order_id`
+/// зберігається, у журналі — «Стоп відновлено».
+///
+/// Помилка, якщо у брокера немає вільного обсягу або старий стоп ще не скасовано
+/// («Старий стоп ще не скасовано: …»).
 pub async fn ensure_stop(d: &Deps, p: &TrackedPosition) -> Result<TrackedPosition, CycleError> {
+    let sym = &p.position.symbol;
+    let held: i64 = observe(d, d.broker.positions().await)?
+        .iter()
+        .filter(|b| b.symbol == *sym)
+        .map(|b| b.qty)
+        .sum();
     let current = current_stop(d, p, None).await?;
-    protect(d, p, current).await
+    match protect(d, p, current, held).await? {
+        Protection::Protected(updated) => Ok(updated),
+        Protection::Covered => Err(CycleError::Other(format!(
+            "стоп для {sym} не подано: у брокера немає вільного обсягу"
+        ))),
+        Protection::Waiting(id) => Err(CycleError::Other(format!(
+            "Старий стоп ще не скасовано: {id}"
+        ))),
+    }
+}
+
+/// Результат захисту позиції.
+enum Protection {
+    /// Позиція під робочим стопом (`stop_order_id` міг змінитися).
+    Protected(TrackedPosition),
+    /// Захищати нічого: у брокера немає вільного обсягу (подія в журналі).
+    Covered,
+    /// Старий стоп ще не скасовано: новий не подано (подія в журналі).
+    Waiting(String),
 }
 
 async fn protect(
     d: &Deps,
     p: &TrackedPosition,
     current: Option<BrokerOrder>,
-) -> Result<TrackedPosition, CycleError> {
-    if current.as_ref().is_some_and(|o| protects(o, p)) {
-        return Ok(p.clone());
-    }
+    held: i64,
+) -> Result<Protection, CycleError> {
     let pos = &p.position;
+    let sym = &pos.symbol;
     let open = observe(d, d.broker.open_orders().await)?;
-    let existing = flatten(&open)
-        .into_iter()
-        .map(|(o, _)| o)
-        .find(|o| protects(o, p))
-        .cloned();
-    if let Some(o) = existing {
+    let orders = flatten(&open);
+    let reserved = reserved_qty(&orders, sym);
+    let target = target_qty(pos.qty, held, reserved);
+    if target == 0 {
+        journal(
+            d,
+            EventKind::Order,
+            Some(sym),
+            Some(&p.intent_id),
+            format!(
+                "Стоп для {sym} не подано: у брокера {held} шт., з них {reserved} шт. уже \
+                 продають відкриті ордери"
+            ),
+            json!({ "held": held, "reserved": reserved, "tracked": pos.qty }),
+        )
+        .await?;
+        return Ok(Protection::Covered);
+    }
+
+    // Живі Sell Stop тікера (зокрема ті, що ще скасовуються) і поточний стоп, навіть
+    // якщо він утримується чи в невідомому стані.
+    let mut live: Vec<BrokerOrder> = orders
+        .iter()
+        .map(|(o, _)| *o)
+        .filter(|o| {
+            is_sell_stop(o, sym) && !o.status.is_terminal() && o.status != OrderStatus::Held
+        })
+        .cloned()
+        .collect();
+    if let Some(c) = current.as_ref().filter(|c| {
+        is_sell_stop(c, sym) && !c.status.is_terminal() && live.iter().all(|o| o.id != c.id)
+    }) {
+        live.push(c.clone());
+    }
+    let current_id = p.stop_order_id.as_deref();
+    let keep = live
+        .iter()
+        .position(|o| working(o, sym, target) && Some(o.id.as_str()) == current_id)
+        .or_else(|| live.iter().position(|o| working(o, sym, target)))
+        .map(|i| live.remove(i));
+
+    // Решта живих стопів зайва: разом із робочим вони продали б більше, ніж є.
+    let mut waiting = None;
+    for old in &live {
+        match cancel_confirmed(d, old).await? {
+            Some(done) if done.filled_qty > 0 => {
+                return Err(CycleError::Other(format!(
+                    "стоп-ордер {} виконано ({} шт.) до скасування; позицію уточнить наступна \
+                     звірка",
+                    old.id, done.filled_qty
+                )));
+            }
+            Some(_) => {}
+            None => {
+                journal(
+                    d,
+                    EventKind::Order,
+                    Some(sym),
+                    Some(&p.intent_id),
+                    format!("Старий стоп ще не скасовано: {}", old.id),
+                    json!({ "order_id": old.id, "status": old.status }),
+                )
+                .await?;
+                waiting.get_or_insert_with(|| old.id.clone());
+            }
+        }
+    }
+    if let Some(o) = keep {
+        if Some(o.id.as_str()) == current_id {
+            return Ok(Protection::Protected(p.clone()));
+        }
         let message = format!(
             "Стоп відновлено: використано наявний стоп-ордер {} на {} шт.",
             o.id, o.qty
         );
-        return record(d, p, &o, message).await;
+        return record(d, p, &o, message).await.map(Protection::Protected);
     }
-    if let Some(old) = current.as_ref().filter(|o| o.status.is_open()) {
-        cancel_stale(d, old).await?;
+    if let Some(id) = waiting {
+        return Ok(Protection::Waiting(id));
     }
+
     let stop = to_price(pos.stop_price).map_err(|e| {
         CycleError::Other(format!(
             "некоректна ціна стопа {} для {}: {e}",
@@ -821,9 +1100,9 @@ async fn protect(
     ));
     let req = OrderRequest {
         client_order_id: cid.clone(),
-        symbol: pos.symbol.clone(),
+        symbol: sym.clone(),
         side: Side::Sell,
-        qty: pos.qty,
+        qty: target,
         order_type: OrderType::Stop,
         limit_price: None,
         stop_price: Some(stop),
@@ -838,43 +1117,37 @@ async fn protect(
         // інакше — помилка, наступна звірка подасть стоп з новою міткою часу.
         Err(BrokerError::DuplicateClientOrderId) => {
             match observe(d, d.broker.order_by_client_id(&cid).await)? {
-                Some(o) if protects(&o, p) => o,
+                Some(o) if working(&o, sym, target) => o,
                 _ => return Err(BrokerError::DuplicateClientOrderId.into()),
             }
         }
         Err(e) => return Err(e.into()),
     };
     let message = format!(
-        "Стоп відновлено: {} шт., стоп {stop}, ордер {}",
-        pos.qty, order.id
+        "Стоп відновлено: {target} шт., стоп {stop}, ордер {}",
+        order.id
     );
-    record(d, p, &order, message).await
+    record(d, p, &order, message)
+        .await
+        .map(Protection::Protected)
 }
 
-/// Скасовує застарілий стоп. Новий не подається, доки старий не завершився без виконання
-/// (перевіряється повторним запитом, навіть якщо скасування повернуло помилку), інакше
-/// продаж може задвоїтись.
-async fn cancel_stale(d: &Deps, old: &BrokerOrder) -> Result<(), CycleError> {
-    let cancelled = observe(d, d.broker.cancel(&old.id).await);
-    let after = observe(d, d.broker.order(&old.id).await)?;
-    d.store.upsert_order(&after, d.clock.now()).await?;
-    if after.status.is_open() {
-        let why = cancelled
-            .err()
-            .map(|e| format!(": {e}"))
-            .unwrap_or_default();
-        return Err(CycleError::Other(format!(
-            "стоп-ордер {} ще не скасовано{why}",
-            old.id
-        )));
+/// Скасовує ордер і перевіряє (до `CANCEL_CHECKS` разів), що він завершився. `None` — ще не
+/// завершився (наприклад, `pending_cancel`, який іще може виконатись).
+async fn cancel_confirmed(d: &Deps, o: &BrokerOrder) -> Result<Option<BrokerOrder>, CycleError> {
+    // Результат скасування не вирішальний (ордер міг уже завершитись): вирішує повторний запит.
+    let _ = observe(d, d.broker.cancel(&o.id).await);
+    for check in 0..CANCEL_CHECKS {
+        if check > 0 {
+            tokio::time::sleep(CANCEL_POLL).await;
+        }
+        let now = observe(d, d.broker.order(&o.id).await)?;
+        if now.status.is_terminal() {
+            d.store.upsert_order(&now, d.clock.now()).await?;
+            return Ok(Some(now));
+        }
     }
-    if after.filled_qty > 0 {
-        return Err(CycleError::Other(format!(
-            "стоп-ордер {} виконано ({} шт.) до скасування; позицію уточнить наступна звірка",
-            old.id, after.filled_qty
-        )));
-    }
-    Ok(())
+    Ok(None)
 }
 
 /// Зберігає стоп-ордер і позицію з ним; подія в журналі.
@@ -1262,7 +1535,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn qty_difference_and_missing_position_are_reported() {
+    async fn qty_difference_pauses_and_vanished_position_is_closed() {
         let (dp, h) = setup().await;
         held_aapl(&dp, &h).await;
         let (_, msft) = submit_entry(&dp, "MSFT", 20, dec!(50.00), dec!(47.00), None).await;
@@ -1275,23 +1548,49 @@ mod tests {
 
         let report = reconcile(&dp).await.unwrap();
 
+        // AAPL — розбіжність (пауза); MSFT у брокера немає — позицію закрито, а її стоп
+        // скасовано, щоб він не відкрив шорт.
         assert_eq!(
             report.mismatches,
-            vec![
-                Mismatch::QtyDiffers {
-                    symbol: sym("AAPL"),
-                    local: 10,
-                    broker: 7
-                },
-                Mismatch::MissingBrokerPosition {
-                    symbol: sym("MSFT")
-                },
-            ]
+            vec![Mismatch::QtyDiffers {
+                symbol: sym("AAPL"),
+                local: 10,
+                broker: 7
+            }]
+        );
+        assert_eq!(report.exits_filled, vec![sym("MSFT")]);
+        let held = dp.store.positions().await.unwrap();
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].position.symbol, sym("AAPL"));
+        assert_eq!(order_status(&h, "ord-2-stop").await, OrderStatus::Canceled);
+        assert!(
+            journal_messages(&dp)
+                .await
+                .iter()
+                .any(|m| m.starts_with("Позицію MSFT закрито у брокера"))
         );
         assert!(matches!(
             dp.store.engine_mode().await.unwrap(),
             EngineMode::Paused { .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn fill_seen_after_positions_snapshot_is_not_a_mismatch() {
+        let (dp, h) = setup().await;
+        // Знімок позицій зроблено до запиту ордера: у знімку купівлі ще немає.
+        let (intent, order) = submit_entry(&dp, "AAPL", 10, dec!(101.00), dec!(95.50), None).await;
+        h.broker.fill(&order.id, dec!(101.00), 10);
+        h.broker.set_position(&sym("AAPL"), 0, dec!(0));
+
+        let report = reconcile(&dp).await.unwrap();
+
+        assert_eq!(status(&dp, &intent.id).await, IntentStatus::Filled);
+        assert!(report.mismatches.is_empty());
+        assert_eq!(dp.store.engine_mode().await.unwrap(), EngineMode::Running);
+        // Стоп-нога не чіпається, поки знімок не підтвердить обсяг.
+        assert_eq!(order_status(&h, "ord-1-stop").await, OrderStatus::New);
+        assert_eq!(h.broker.submitted().len(), 1);
     }
 
     #[tokio::test]
@@ -1336,8 +1635,8 @@ mod tests {
         let (msft, m) = submit_entry(&dp, "MSFT", 20, dec!(50.00), dec!(47.00), None).await;
         h.broker.fill(&a.id, dec!(101.00), 10);
         h.broker.fill(&m.id, dec!(50.00), 20);
-        // Перший запит звірки (ордер AAPL) падає.
-        h.broker.fail_next(BrokerError::Transient("503".into()));
+        // Запит ордера AAPL падає (один раз).
+        h.broker.fail_next_lookup(&client_order_id(&aapl.id));
 
         let report = reconcile(&dp).await.unwrap();
 
@@ -1492,7 +1791,7 @@ mod tests {
         assert!(
             journal
                 .iter()
-                .any(|m| m.starts_with("Не вдалося захистити позицію NVDA")),
+                .any(|m| m == "Старий стоп ще не скасовано: ord-1-stop"),
             "{journal:?}"
         );
 
@@ -1517,5 +1816,258 @@ mod tests {
         assert_eq!(status(&dp, &mv.id).await, IntentStatus::Submitted);
         assert!(report.reprotected.is_empty());
         assert_eq!(h.broker.submitted().len(), 1);
+    }
+
+    /// Робочі (відкриті, не `Held`) Sell Stop тікера у брокера: (id, qty).
+    async fn live_sell_stops(h: &Handles, symbol: &str) -> Vec<(String, u32)> {
+        let open = h.broker.open_orders().await.unwrap();
+        flatten(&open)
+            .into_iter()
+            .map(|(o, _)| o)
+            .filter(|o| {
+                o.symbol == sym(symbol)
+                    && o.side == Side::Sell
+                    && o.order_type == OrderType::Stop
+                    && o.status.is_open()
+                    && o.status != OrderStatus::Held
+            })
+            .map(|o| (o.id.clone(), o.qty))
+            .collect()
+    }
+
+    fn stop_request(cid: &str, symbol: &str, qty: u32, stop: Decimal) -> OrderRequest {
+        OrderRequest {
+            client_order_id: cid.into(),
+            symbol: sym(symbol),
+            side: Side::Sell,
+            qty,
+            order_type: OrderType::Stop,
+            limit_price: None,
+            stop_price: Some(stop),
+            tif: TimeInForce::Gtc,
+            class: OrderClass::Simple,
+            stop_loss: None,
+            take_profit: None,
+        }
+    }
+
+    async fn order_status(h: &Handles, id: &str) -> OrderStatus {
+        h.broker.order(id).await.unwrap().status
+    }
+
+    fn pending_cancel() -> OrderStatus {
+        OrderStatus::Other("pending_cancel".into())
+    }
+
+    /// Bracket AAPL 10 шт. (стоп 95.50, ціль 115.25), виконаний і звірений:
+    /// стоп-нога `ord-1-stop`, ціль `ord-1-tp`.
+    async fn held_aapl_bracket(dp: &Deps, h: &Handles) {
+        let (_, order) = submit_entry(
+            dp,
+            "AAPL",
+            10,
+            dec!(101.00),
+            dec!(95.50),
+            Some(dec!(115.25)),
+        )
+        .await;
+        h.broker.fill(&order.id, dec!(101.00), 10);
+        reconcile(dp).await.unwrap();
+        assert_eq!(dp.store.positions().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn pending_cancel_stop_blocks_reprotect_after_expired_exit() {
+        let (dp, h) = setup().await;
+        held_aapl(&dp, &h).await;
+        // Крок відправки скасував стоп, але брокер ще не завершив скасування.
+        h.broker.set_status("ord-1-stop", pending_cancel());
+        let (exit, order) = submit_exit(&dp, "AAPL", 10).await;
+        h.broker.expire(&order.id);
+
+        let report = reconcile(&dp).await.unwrap();
+
+        assert_eq!(status(&dp, &exit.id).await, IntentStatus::Cancelled);
+        assert!(report.reprotected.is_empty());
+        // Другого стопа поруч зі старим, що ще може виконатись, немає.
+        assert_eq!(h.broker.submitted().len(), 2);
+        let held = dp.store.positions().await.unwrap();
+        assert_eq!(held[0].stop_order_id.as_deref(), Some("ord-1-stop"));
+        let journal = journal_messages(&dp).await;
+        assert!(
+            journal
+                .iter()
+                .any(|m| m == "Старий стоп ще не скасовано: ord-1-stop"),
+            "{journal:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_cancel_leg_blocks_protect_on_partial_entry() {
+        let (dp, h) = setup().await;
+        let (_, order) = submit_entry(&dp, "NVDA", 148, dec!(101.00), dec!(96.00), None).await;
+        h.broker.fill(&order.id, dec!(101.00), 50);
+        h.broker.expire(&order.id);
+        h.broker.set_status("ord-1-stop", pending_cancel());
+
+        let report = reconcile(&dp).await.unwrap();
+
+        assert_eq!(report.entries_filled, vec![sym("NVDA")]);
+        assert!(report.reprotected.is_empty());
+        assert_eq!(h.broker.submitted().len(), 1);
+        let held = dp.store.positions().await.unwrap();
+        assert_eq!(held[0].position.qty, 50);
+        assert_eq!(held[0].stop_order_id.as_deref(), Some("ord-1-stop"));
+        assert!(
+            journal_messages(&dp)
+                .await
+                .iter()
+                .any(|m| m == "Старий стоп ще не скасовано: ord-1-stop")
+        );
+    }
+
+    #[tokio::test]
+    async fn bracket_target_fill_closes_position_and_cancels_leftover_stop() {
+        let (dp, h) = setup().await;
+        held_aapl_bracket(&dp, &h).await;
+        // Ціль виконано; стоп-нога (FakeBroker не має OCO) ще відкрита.
+        h.broker.fill("ord-1-tp", dec!(115.25), 10);
+
+        let report = reconcile(&dp).await.unwrap();
+
+        assert!(dp.store.positions().await.unwrap().is_empty());
+        assert_eq!(order_status(&h, "ord-1-stop").await, OrderStatus::Canceled);
+        assert_eq!(h.broker.submitted().len(), 1);
+        assert_eq!(report.exits_filled, vec![sym("AAPL")]);
+        assert!(report.reprotected.is_empty());
+        assert!(report.mismatches.is_empty());
+        assert_eq!(dp.store.engine_mode().await.unwrap(), EngineMode::Running);
+    }
+
+    #[tokio::test]
+    async fn oco_cancelled_stop_after_target_fill_is_not_replaced() {
+        let (dp, h) = setup().await;
+        held_aapl_bracket(&dp, &h).await;
+        // Брокер скасував стоп (OCO), коли виконалась ціль: позиції більше немає.
+        h.broker.cancel("ord-1-stop").await.unwrap();
+        h.broker.fill("ord-1-tp", dec!(115.25), 10);
+
+        let report = reconcile(&dp).await.unwrap();
+
+        assert!(dp.store.positions().await.unwrap().is_empty());
+        assert_eq!(h.broker.submitted().len(), 1);
+        assert!(live_sell_stops(&h, "AAPL").await.is_empty());
+        assert!(report.reprotected.is_empty());
+        assert!(report.mismatches.is_empty());
+    }
+
+    #[tokio::test]
+    async fn exit_fill_cancels_leftover_open_stop() {
+        let (dp, h) = setup().await;
+        held_aapl(&dp, &h).await;
+        // Стоп-нога лишилась відкритою, а вихід виконався повністю.
+        let (_, order) = submit_exit(&dp, "AAPL", 10).await;
+        h.broker.fill(&order.id, dec!(104.00), 10);
+
+        let report = reconcile(&dp).await.unwrap();
+
+        assert_eq!(report.exits_filled, vec![sym("AAPL")]);
+        assert!(dp.store.positions().await.unwrap().is_empty());
+        assert_eq!(order_status(&h, "ord-1-stop").await, OrderStatus::Canceled);
+        assert_eq!(h.broker.submitted().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn stop_hit_cancels_leftover_take_profit() {
+        let (dp, h) = setup().await;
+        held_aapl_bracket(&dp, &h).await;
+        h.broker.fill("ord-1-stop", dec!(95.40), 10);
+
+        let report = reconcile(&dp).await.unwrap();
+
+        assert_eq!(report.stops_hit, vec![sym("AAPL")]);
+        assert!(dp.store.positions().await.unwrap().is_empty());
+        assert_eq!(order_status(&h, "ord-1-tp").await, OrderStatus::Canceled);
+    }
+
+    #[tokio::test]
+    async fn partial_exit_adoption_leaves_one_live_stop() {
+        let (dp, h) = setup().await;
+        held_aapl(&dp, &h).await;
+        // Вихід продав 4 з 10 і прострочився; стоп-нога на 10 ще відкрита, а на залишок
+        // уже є захисний стоп, поданий раніше.
+        let (exit, order) = submit_exit(&dp, "AAPL", 10).await;
+        h.broker.fill(&order.id, dec!(104.00), 4);
+        h.broker.expire(&order.id);
+        let earlier = dp
+            .broker
+            .submit(&stop_request("fond-earlier", "AAPL", 6, dec!(95.50)))
+            .await
+            .unwrap();
+
+        let report = reconcile(&dp).await.unwrap();
+
+        assert_eq!(report.exits_filled, vec![sym("AAPL")]);
+        assert_eq!(status(&dp, &exit.id).await, IntentStatus::Filled);
+        assert_eq!(
+            live_sell_stops(&h, "AAPL").await,
+            vec![(earlier.id.clone(), 6)]
+        );
+        assert_eq!(order_status(&h, "ord-1-stop").await, OrderStatus::Canceled);
+        let held = dp.store.positions().await.unwrap();
+        assert_eq!(held[0].position.qty, 6);
+        assert_eq!(held[0].stop_order_id.as_deref(), Some(earlier.id.as_str()));
+        assert_eq!(h.broker.submitted().len(), 3);
+        assert!(report.mismatches.is_empty());
+    }
+
+    #[tokio::test]
+    async fn partial_bracket_entry_cancels_take_profit_leg() {
+        let (dp, h) = setup().await;
+        let (_, order) = submit_entry(
+            &dp,
+            "NVDA",
+            148,
+            dec!(101.00),
+            dec!(96.00),
+            Some(dec!(120.00)),
+        )
+        .await;
+        h.broker.fill(&order.id, dec!(101.00), 50);
+        h.broker.expire(&order.id);
+
+        reconcile(&dp).await.unwrap();
+
+        // Ноги розраховані на 148 шт.: обидві скасовано, стоп — на виконані 50.
+        assert_eq!(order_status(&h, "ord-1-tp").await, OrderStatus::Canceled);
+        assert_eq!(order_status(&h, "ord-1-stop").await, OrderStatus::Canceled);
+        assert_eq!(
+            live_sell_stops(&h, "NVDA").await,
+            vec![("ord-2".to_string(), 50)]
+        );
+    }
+
+    #[tokio::test]
+    async fn protective_stop_never_exceeds_broker_qty() {
+        let (dp, h) = setup().await;
+        held_aapl(&dp, &h).await;
+        // 3 шт. продано повз рушій: стоп на 10 при 7 у брокера відкрив би шорт.
+        h.broker.set_position(&sym("AAPL"), 7, dec!(101));
+
+        let report = reconcile(&dp).await.unwrap();
+
+        assert_eq!(order_status(&h, "ord-1-stop").await, OrderStatus::Canceled);
+        assert_eq!(
+            live_sell_stops(&h, "AAPL").await,
+            vec![("ord-2".to_string(), 7)]
+        );
+        assert_eq!(
+            report.mismatches,
+            vec![Mismatch::QtyDiffers {
+                symbol: sym("AAPL"),
+                local: 10,
+                broker: 7
+            }]
+        );
     }
 }

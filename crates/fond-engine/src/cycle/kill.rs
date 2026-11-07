@@ -11,22 +11,24 @@ use fond_core::orders::{
     BrokerOrder, OrderClass, OrderRequest, OrderStatus, OrderType, Side, TimeInForce,
 };
 use fond_core::portfolio::TrackedPosition;
-use fond_core::types::EngineMode;
+use fond_core::types::{EngineMode, Symbol};
 use fond_store::{EventKind, StoreError};
 use serde_json::json;
 
-use super::reconcile::{broker_failure, ensure_stop, flatten, observe};
+use super::reconcile::{broker_failure, ensure_stop, flatten, observe, reconcile};
 use super::{CycleError, journal};
 use crate::deps::Deps;
 
 /// Причина режиму `Killed`, коли зупинку ввімкнув користувач.
 pub const KILL_REASON: &str = "Аварійна зупинка користувачем";
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct KillReport {
     pub orders_cancelled: usize,
     pub positions_closed: usize,
     pub intents_cancelled: usize,
+    /// Звірка після зупинки без закриття позицій не вдалася (текст помилки; подія в журналі).
+    pub reconcile_error: Option<String>,
 }
 
 /// Ставить паузу, лише якщо рушій працює: аварійна зупинка чи інша пауза не змінюються.
@@ -85,10 +87,15 @@ pub async fn resume(d: &Deps) -> Result<(), CycleError> {
 ///
 /// Без закриття позицій лишаються робочі захисні стопи: стоп-ордери відстежуваних позицій і
 /// Sell Stop, чий батьківський ордер уже не відкритий (нога виконаного входу, який ще не
-/// звірено, або окремий захисний стоп). Із закриттям скасовується все, крім власних продажів
-/// аварійного закриття цього дня, і на кожну позицію брокера подається Sell Market Day з
-/// `client_order_id = "fond-kill-{yyyymmdd ET}-{symbol}"`; відправлені наміри, чиї ордери вже
-/// не відкриті, теж скасовуються, щоб звірка не відкрила знову закриту позицію.
+/// звірено, або окремий захисний стоп). Далі одразу виконується звірка: вона добирає часткові
+/// виконання скасованих входів і відновлює стопи позицій, чиї виходи скасовано (пауза під
+/// `Killed` не діє); її помилка — у журналі й у `KillReport::reconcile_error`.
+///
+/// Із закриттям скасовується все, крім власних продажів аварійного закриття цього дня, і на
+/// кожну позицію брокера подається Sell Market Day з
+/// `client_order_id = "fond-kill-{yyyymmdd ET}-{symbol}"`. Відправлений намір скасовується,
+/// лише коли його ордер завершився без виконання й позиції за тікером не було; інакше він
+/// лишається `Submitted`, щоб звірка взяла на облік і захистила те, що не продано.
 /// Невдале скасування чи продаж — подія в журналі, а не помилка.
 pub async fn kill(d: &Deps, close_positions: bool) -> Result<KillReport, CycleError> {
     let mut report = KillReport::default();
@@ -138,7 +145,6 @@ pub async fn kill(d: &Deps, close_positions: bool) -> Result<KillReport, CycleEr
         .filter_map(|p| p.stop_order_id.as_deref())
         .collect();
     let mut failures = 0;
-    let mut still_open: HashSet<String> = HashSet::new();
     for (o, parent) in flatten(&open) {
         if !o.status.is_open() {
             continue;
@@ -154,28 +160,25 @@ pub async fn kill(d: &Deps, close_positions: bool) -> Result<KillReport, CycleEr
         match cancel(d, o).await? {
             Cancel::Done => report.orders_cancelled += 1,
             Cancel::NotOpen => {}
-            Cancel::Failed => {
-                failures += 1;
-                still_open.insert(o.client_order_id.clone());
-            }
+            Cancel::Failed => failures += 1,
         }
     }
 
     if close_positions {
-        report.positions_closed = close_all(d, &tracked, &kill_prefix, &mut failures).await?;
-        let submitted = d
-            .store
-            .intents_with_status(&[IntentStatus::Submitted])
-            .await?;
-        for i in submitted.iter().filter(|i| {
-            matches!(i.kind, IntentKind::Entry { .. } | IntentKind::Exit { .. })
-                && !still_open.contains(&client_order_id(&i.id))
-        }) {
-            let note = "Скасовано аварійною зупинкою: ордер скасовано, позиції закрито";
-            if cancel_intent(d, &i.id, note).await? {
-                report.intents_cancelled += 1;
-            }
-        }
+        let (closed, had_position) = close_all(d, &tracked, &kill_prefix, &mut failures).await?;
+        report.positions_closed = closed;
+        report.intents_cancelled += settle_submitted(d, &had_position).await?;
+    } else if let Err(e) = reconcile(d).await {
+        journal(
+            d,
+            EventKind::Error,
+            None,
+            None,
+            format!("Аварійна зупинка: звірку після скасування ордерів не завершено: {e}"),
+            json!({ "error": e.to_string() }),
+        )
+        .await?;
+        report.reconcile_error = Some(e.to_string());
     }
 
     journal(
@@ -193,6 +196,7 @@ pub async fn kill(d: &Deps, close_positions: bool) -> Result<KillReport, CycleEr
             "positions_closed": report.positions_closed,
             "intents_cancelled": report.intents_cancelled,
             "failures": failures,
+            "reconcile_error": report.reconcile_error,
         }),
     )
     .await?;
@@ -236,7 +240,8 @@ async fn cancel(d: &Deps, o: &BrokerOrder) -> Result<Cancel, CycleError> {
     };
     match observe(d, d.broker.order(&o.id).await) {
         Ok(now) if now.status == OrderStatus::Canceled => return Ok(Cancel::Done),
-        Ok(now) if !now.status.is_open() => return Ok(Cancel::NotOpen),
+        // Лише остаточний стан: `pending_cancel` та інші невідомі ще можуть виконатись.
+        Ok(now) if now.status.is_terminal() => return Ok(Cancel::NotOpen),
         _ => {}
     }
     journal(
@@ -254,13 +259,64 @@ async fn cancel(d: &Deps, o: &BrokerOrder) -> Result<Cancel, CycleError> {
     Ok(Cancel::Failed)
 }
 
-/// Продає за ринком кожну довгу позицію брокера. Повертає кількість поданих продажів.
+/// Відправлені входи й виходи після аварійного закриття. Намір скасовується, лише коли його
+/// ордер завершився без жодного виконання й позиції за тікером у брокера не було (або ордера
+/// немає взагалі); інакше він лишається `Submitted`, щоб звірка взяла виконання на облік і
+/// захистила те, що не вдалося продати. Причина — у журналі.
+async fn settle_submitted(d: &Deps, had_position: &HashSet<Symbol>) -> Result<usize, CycleError> {
+    let submitted = d
+        .store
+        .intents_with_status(&[IntentStatus::Submitted])
+        .await?;
+    let mut cancelled = 0;
+    for i in submitted
+        .iter()
+        .filter(|i| matches!(i.kind, IntentKind::Entry { .. } | IntentKind::Exit { .. }))
+    {
+        let cid = client_order_id(&i.id);
+        let keep = match observe(d, d.broker.order_by_client_id(&cid).await) {
+            Err(e) => Some(format!("не вдалося перевірити ордер: {e}")),
+            Ok(None) => None,
+            Ok(Some(o)) if !o.status.is_terminal() => Some("ордер ще не скасовано".to_string()),
+            Ok(Some(o)) if o.filled_qty > 0 => {
+                Some(format!("ордер виконано: {} шт.", o.filled_qty))
+            }
+            Ok(Some(_)) if had_position.contains(&i.symbol) => {
+                Some(format!("у брокера є позиція {}", i.symbol))
+            }
+            Ok(Some(_)) => None,
+        };
+        match keep {
+            Some(why) => {
+                journal(
+                    d,
+                    EventKind::Intent,
+                    Some(&i.symbol),
+                    Some(&i.id),
+                    format!("Намір лишається відправленим ({why}): позицію добере звірка"),
+                    json!({ "reason": why }),
+                )
+                .await?;
+            }
+            None => {
+                let note = "Скасовано аварійною зупинкою: ордер не виконано, позиції немає";
+                if cancel_intent(d, &i.id, note).await? {
+                    cancelled += 1;
+                }
+            }
+        }
+    }
+    Ok(cancelled)
+}
+
+/// Продає за ринком кожну довгу позицію брокера. Повертає кількість поданих продажів і
+/// тікери, за якими у брокера була позиція.
 async fn close_all(
     d: &Deps,
     tracked: &[TrackedPosition],
     kill_prefix: &str,
     failures: &mut usize,
-) -> Result<usize, CycleError> {
+) -> Result<(usize, HashSet<Symbol>), CycleError> {
     let positions = match observe(d, d.broker.positions().await) {
         Ok(p) => p,
         Err(e) => {
@@ -268,6 +324,11 @@ async fn close_all(
         }
     };
     let mut closed = 0;
+    let had_position: HashSet<Symbol> = positions
+        .iter()
+        .filter(|p| p.qty != 0)
+        .map(|p| p.symbol.clone())
+        .collect();
     for bp in positions.iter().filter(|p| p.qty != 0) {
         let sym = &bp.symbol;
         let Some(qty) = u32::try_from(bp.qty).ok().filter(|q| *q > 0) else {
@@ -353,7 +414,7 @@ async fn close_all(
             }
         }
     }
-    Ok(closed)
+    Ok((closed, had_position))
 }
 
 async fn reprotect_after_failed_sale(d: &Deps, p: &TrackedPosition) -> Result<(), CycleError> {
@@ -384,15 +445,16 @@ mod tests {
     use fond_api::events::EngineEventDto;
     use fond_core::ids::IntentTag;
     use fond_core::intent::{IntentKind, IntentStatus};
-    use fond_core::orders::{OrderClass, OrderStatus, OrderType, Side, TimeInForce};
+    use fond_core::orders::{OrderClass, OrderRequest, OrderStatus, OrderType, Side, TimeInForce};
     use fond_core::testkit::FakeClock;
     use fond_core::traits::{Broker, Clock};
     use fond_core::types::EngineMode;
     use rust_decimal_macros::dec;
 
+    use super::super::reconcile::reconcile;
     use super::super::test_support::{
-        Handles, drain, entry_kind, et, fixture, held_aapl, intent_with, journal_messages, session,
-        submit_entry, sym,
+        Handles, drain, entry_kind, et, fail_inserts, fixture, held_aapl, intent_with,
+        journal_messages, session, submit_entry, submit_exit, sym,
     };
     use super::*;
 
@@ -544,12 +606,14 @@ mod tests {
                 orders_cancelled: 2,
                 positions_closed: 0,
                 intents_cancelled: 0,
+                reconcile_error: None,
             }
         );
-        // Без закриття: продажів немає, позиція й відправлений намір лишаються.
+        // Без закриття: продажів немає, позиція лишається; звірка після скасування
+        // позначила невиконаний вхід MSFT скасованим.
         assert_eq!(h.broker.submitted().len(), 2);
         assert_eq!(dp.store.positions().await.unwrap(), vec![held]);
-        assert_eq!(status(&dp, &msft.id).await, IntentStatus::Submitted);
+        assert_eq!(status(&dp, &msft.id).await, IntentStatus::Cancelled);
         assert_eq!(dp.store.engine_mode().await.unwrap(), killed());
         assert!(drain(&mut rx).contains(&EngineEventDto::Killed {
             reason: KILL_REASON.into()
@@ -574,6 +638,78 @@ mod tests {
         assert!(h.broker.cancels().is_empty());
         assert_eq!(order_status(&h, "ord-1-stop").await, OrderStatus::New);
         assert_eq!(report.orders_cancelled, 0);
+        // Звірка після зупинки взяла позицію на облік зі стоп-ногою.
+        let held = dp.store.positions().await.unwrap();
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].stop_order_id.as_deref(), Some("ord-1-stop"));
+    }
+
+    #[tokio::test]
+    async fn kill_without_close_reprotects_cancelled_exit() {
+        let (dp, h) = setup().await;
+        held_aapl(&dp, &h).await;
+        // Крок відправки скасував стоп і подав вихід; зупинка скасовує вихід.
+        h.broker.cancel("ord-1-stop").await.unwrap();
+        let (exit, _) = submit_exit(&dp, "AAPL", 10).await;
+
+        let report = kill(&dp, false).await.unwrap();
+
+        assert_eq!(report.orders_cancelled, 1);
+        assert_eq!(report.reconcile_error, None);
+        assert_eq!(status(&dp, &exit.id).await, IntentStatus::Cancelled);
+        let held = dp.store.positions().await.unwrap();
+        assert_eq!(held.len(), 1);
+        let stop_id = held[0].stop_order_id.clone().unwrap();
+        assert_eq!(stop_id, "ord-3");
+        let stop = h.broker.order(&stop_id).await.unwrap();
+        assert!(stop.status.is_open());
+        assert_eq!(
+            (stop.side, stop.order_type, stop.qty),
+            (Side::Sell, OrderType::Stop, 10)
+        );
+    }
+
+    #[tokio::test]
+    async fn kill_without_close_protects_partial_open_entry() {
+        let (dp, h) = setup().await;
+        let (entry, order) = submit_entry(&dp, "NVDA", 148, dec!(101.00), dec!(96.00), None).await;
+        h.broker.fill(&order.id, dec!(101.00), 50);
+
+        let report = kill(&dp, false).await.unwrap();
+
+        assert_eq!(order_status(&h, "ord-1").await, OrderStatus::Canceled);
+        assert_eq!(report.reconcile_error, None);
+        assert_eq!(status(&dp, &entry.id).await, IntentStatus::Filled);
+        let held = dp.store.positions().await.unwrap();
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].position.qty, 50);
+        let stop = h
+            .broker
+            .order(held[0].stop_order_id.as_deref().unwrap())
+            .await
+            .unwrap();
+        assert!(stop.status.is_open());
+        assert_eq!((stop.side, stop.qty), (Side::Sell, 50));
+    }
+
+    #[tokio::test]
+    async fn kill_without_close_reports_reconcile_failure() {
+        let (dp, _h) = setup().await;
+        // Звірка після зупинки падає на записі знімка капіталу.
+        fail_inserts(&dp.store, "equity_snapshots").await;
+
+        let report = kill(&dp, false).await.unwrap();
+
+        let err = report.reconcile_error.expect("помилка звірки у звіті");
+        assert!(err.contains("inserts into equity_snapshots"), "{err}");
+        assert_eq!(dp.store.engine_mode().await.unwrap(), killed());
+        let journal = journal_messages(&dp).await;
+        assert!(
+            journal
+                .iter()
+                .any(|m| m.starts_with("Аварійна зупинка: звірку після скасування")),
+            "{journal:?}"
+        );
     }
 
     #[tokio::test]
@@ -634,6 +770,7 @@ mod tests {
                 orders_cancelled: 3,
                 positions_closed: 2,
                 intents_cancelled: 1,
+                reconcile_error: None,
             }
         );
         assert!(dp.store.positions().await.unwrap().is_empty());
@@ -672,8 +809,87 @@ mod tests {
                 orders_cancelled: 0,
                 positions_closed: 1,
                 intents_cancelled: 0,
+                reconcile_error: None,
             }
         );
+    }
+
+    #[tokio::test]
+    async fn failed_kill_sale_on_unreconciled_fill_is_protected_by_reconcile() {
+        let (dp, h) = setup().await;
+        // Вхід виконано, звірки ще не було.
+        let (entry, order) = submit_entry(&dp, "AAPL", 10, dec!(101.00), dec!(95.50), None).await;
+        h.broker.fill(&order.id, dec!(101.00), 10);
+        // Продаж аварійного закриття не пройде: ордер із тим самим id уже завершився.
+        let dead = OrderRequest {
+            client_order_id: "fond-kill-20261105-AAPL".into(),
+            symbol: sym("AAPL"),
+            side: Side::Sell,
+            qty: 10,
+            order_type: OrderType::Market,
+            limit_price: None,
+            stop_price: None,
+            tif: TimeInForce::Day,
+            class: OrderClass::Simple,
+            stop_loss: None,
+            take_profit: None,
+        };
+        let dead = dp.broker.submit(&dead).await.unwrap();
+        h.broker.cancel(&dead.id).await.unwrap();
+
+        let report = kill(&dp, true).await.unwrap();
+
+        assert_eq!(report.positions_closed, 0);
+        assert_eq!(report.intents_cancelled, 0);
+        // Нога-стоп скасована, продажу немає: намір лишається відправленим для звірки.
+        assert_eq!(order_status(&h, "ord-1-stop").await, OrderStatus::Canceled);
+        assert_eq!(status(&dp, &entry.id).await, IntentStatus::Submitted);
+        let journal = journal_messages(&dp).await;
+        assert!(
+            journal
+                .iter()
+                .any(|m| m.starts_with("Намір лишається відправленим")),
+            "{journal:?}"
+        );
+
+        reconcile(&dp).await.unwrap();
+
+        assert_eq!(status(&dp, &entry.id).await, IntentStatus::Filled);
+        let held = dp.store.positions().await.unwrap();
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].position.qty, 10);
+        assert_eq!(held[0].stop_order_id.as_deref(), Some("ord-3"));
+        let stop = h.broker.order("ord-3").await.unwrap();
+        assert!(stop.status.is_open());
+        assert_eq!(
+            (stop.side, stop.order_type, stop.qty),
+            (Side::Sell, OrderType::Stop, 10)
+        );
+    }
+
+    #[tokio::test]
+    async fn kill_sale_on_unreconciled_fill_gets_no_extra_stop() {
+        let (dp, h) = setup().await;
+        let (entry, order) = submit_entry(&dp, "AAPL", 10, dec!(101.00), dec!(95.50), None).await;
+        h.broker.fill(&order.id, dec!(101.00), 10);
+
+        let report = kill(&dp, true).await.unwrap();
+
+        assert_eq!(report.positions_closed, 1);
+        assert_eq!(status(&dp, &entry.id).await, IntentStatus::Submitted);
+
+        // Звірка бере виконання на облік, але стоп поверх відкритого продажу не подає.
+        reconcile(&dp).await.unwrap();
+        assert_eq!(status(&dp, &entry.id).await, IntentStatus::Filled);
+        assert_eq!(dp.store.positions().await.unwrap().len(), 1);
+        assert_eq!(h.broker.submitted().len(), 2);
+        assert_eq!(dp.store.engine_mode().await.unwrap(), killed());
+
+        // Продаж виконано: позицію знято з обліку, нових ордерів немає.
+        h.broker.fill("ord-2", dec!(100.00), 10);
+        reconcile(&dp).await.unwrap();
+        assert!(dp.store.positions().await.unwrap().is_empty());
+        assert_eq!(h.broker.submitted().len(), 2);
     }
 
     #[tokio::test]
@@ -728,7 +944,9 @@ mod tests {
                 i.id
             );
         }
-        assert_eq!(status(&dp, &submitted.id).await, IntentStatus::Submitted);
+        // Відправлений намір аварійна зупинка не скасовує; звірка після неї не знайшла
+        // його ордера у брокера.
+        assert_eq!(status(&dp, &submitted.id).await, IntentStatus::Failed);
         assert_eq!(status(&dp, &rejected.id).await, IntentStatus::Rejected);
     }
 

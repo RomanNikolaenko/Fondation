@@ -57,6 +57,7 @@ struct BrokerState {
     cancels: Vec<String>,
     fail_next: Option<BrokerError>,
     fail_cancel: HashSet<String>,
+    fail_lookup: HashSet<String>,
 }
 
 /// Брокер у пам'яті. `open_orders` повертає верхньорівневі ордери (з вкладеними ногами),
@@ -96,6 +97,7 @@ impl FakeBroker {
                 cancels: Vec::new(),
                 fail_next: None,
                 fail_cancel: HashSet::new(),
+                fail_lookup: HashSet::new(),
             }),
             clock,
         }
@@ -263,6 +265,19 @@ impl FakeBroker {
         self.lock().fail_cancel.insert(id.to_string());
     }
 
+    /// Наступний `order_by_client_id` саме для цього id поверне `Transient` (один раз).
+    pub fn fail_next_lookup(&self, client_order_id: &str) {
+        self.lock().fail_lookup.insert(client_order_id.to_string());
+    }
+
+    /// Задає стан ордера (наприклад, `Other("pending_cancel")`).
+    pub fn set_status(&self, id: &str, status: OrderStatus) {
+        let mut st = self.lock();
+        find_mut(&mut st.orders, id)
+            .expect("set_status: unknown order id")
+            .status = status;
+    }
+
     pub fn submitted(&self) -> Vec<OrderRequest> {
         self.lock().submitted.clone()
     }
@@ -314,6 +329,9 @@ impl Broker for FakeBroker {
     ) -> Result<Option<BrokerOrder>, BrokerError> {
         let mut st = self.lock();
         Self::take_failure(&mut st)?;
+        if st.fail_lookup.remove(client_order_id) {
+            return Err(BrokerError::Transient("lookup failed".into()));
+        }
         Ok(find_by_client(&st.orders, client_order_id).cloned())
     }
 
@@ -852,6 +870,23 @@ mod tests {
         assert!(br.account().await.is_ok());
         assert!(br.order_by_client_id("b").await.unwrap().is_some());
         assert!(br.order_by_client_id("zzz").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn set_status_and_one_shot_lookup_failure() {
+        let br = FakeBroker::default();
+        br.submit(&sample_oto_request("a")).await.unwrap();
+        let pending = OrderStatus::Other("pending_cancel".into());
+        br.set_status("ord-1-stop", pending.clone());
+        assert_eq!(br.order("ord-1-stop").await.unwrap().status, pending);
+
+        br.fail_next_lookup("a");
+        assert!(br.order_by_client_id("zzz").await.unwrap().is_none());
+        assert!(matches!(
+            br.order_by_client_id("a").await,
+            Err(BrokerError::Transient(_))
+        ));
+        assert!(br.order_by_client_id("a").await.unwrap().is_some());
     }
 
     #[tokio::test]
