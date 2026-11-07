@@ -38,6 +38,7 @@ ts-rs = { version = "12", features = ["chrono-impl", "serde-json-impl"] }
 insta = { version = "1.49", features = ["json"] }
 wiremock = "0.6"
 url = "2"
+tempfile = "3"
 fs4 = "1"
 dirs = "7"
 clap = { version = "4", features = ["derive"] }
