@@ -9,7 +9,7 @@ use fond_core::traits::{MarketData, NewsSource};
 use fond_core::types::Symbol;
 use serde_json::json;
 use url::Url;
-use wiremock::matchers::{header, method, path, query_param};
+use wiremock::matchers::{header, method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn client_at(server: &MockServer, now: DateTime<Utc>) -> AlpacaClient {
@@ -295,4 +295,124 @@ async fn assets_parse_tradable_and_active() {
     assert_eq!(a[0].symbol, Symbol::new("AAPL"));
     assert!(a[0].tradable && a[0].active);
     assert!(!a[1].tradable && !a[1].active);
+}
+
+fn many_symbols(n: usize) -> Vec<Symbol> {
+    (0..n).map(|i| Symbol::new(&format!("S{i:03}"))).collect()
+}
+
+fn joined(syms: &[Symbol]) -> String {
+    syms.iter()
+        .map(|s| s.as_str())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+#[tokio::test]
+async fn bars_batches_of_100_symbols() {
+    let server = MockServer::start().await;
+    let mut syms = many_symbols(101);
+    let first = joined(&syms[..100]);
+    Mock::given(method("GET"))
+        .and(path("/v2/stocks/bars"))
+        .and(query_param("symbols", first.as_str()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "bars": {"S000": [bar("2026-11-03T05:00:00Z", 1.0)]}, "next_page_token": null
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v2/stocks/bars"))
+        .and(query_param("symbols", "S100"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "bars": {"S100": [bar("2026-11-03T05:00:00Z", 2.0)]}, "next_page_token": null
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    syms.reverse(); // порядок на вході не важливий: розбиття йде за відсортованим
+    let out = client(&server)
+        .daily_bars(&syms, d(2026, 11, 3), d(2026, 11, 3))
+        .await
+        .unwrap();
+    assert_eq!(out.len(), 2);
+    assert_eq!(out[&Symbol::new("S000")][0].close, 1.0);
+    assert_eq!(out[&Symbol::new("S100")][0].close, 2.0);
+    assert_eq!(server.received_requests().await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn bars_page_token_does_not_leak_into_next_chunk() {
+    let server = MockServer::start().await;
+    let syms = many_symbols(101);
+    let first = joined(&syms[..100]);
+    Mock::given(method("GET"))
+        .and(path("/v2/stocks/bars"))
+        .and(query_param("symbols", first.as_str()))
+        .and(query_param_is_missing("page_token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "bars": {"S000": [bar("2026-11-02T05:00:00Z", 1.0)]}, "next_page_token": "t1"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v2/stocks/bars"))
+        .and(query_param("symbols", first.as_str()))
+        .and(query_param("page_token", "t1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "bars": {"S000": [bar("2026-11-03T05:00:00Z", 1.5)]}, "next_page_token": null
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v2/stocks/bars"))
+        .and(query_param("symbols", "S100"))
+        .and(query_param_is_missing("page_token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "bars": {"S100": [bar("2026-11-03T05:00:00Z", 2.0)]}, "next_page_token": null
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let out = client(&server)
+        .daily_bars(&syms, d(2026, 11, 2), d(2026, 11, 3))
+        .await
+        .unwrap();
+    assert_eq!(out[&Symbol::new("S000")].len(), 2);
+    assert_eq!(out[&Symbol::new("S100")].len(), 1);
+    assert_eq!(server.received_requests().await.unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn bars_same_date_on_two_pages_is_deduplicated() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v2/stocks/bars"))
+        .and(query_param("page_token", "t1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "bars": {"AAPL": [bar("2026-11-03T05:00:00Z", 99.0), bar("2026-11-04T05:00:00Z", 3.0)]},
+            "next_page_token": null
+        })))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v2/stocks/bars"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "bars": {"AAPL": [bar("2026-11-03T05:00:00Z", 2.0)]}, "next_page_token": "t1"
+        })))
+        .with_priority(5)
+        .mount(&server)
+        .await;
+    let out = client(&server)
+        .daily_bars(&[Symbol::new("AAPL")], d(2026, 11, 3), d(2026, 11, 4))
+        .await
+        .unwrap();
+    let bars = &out[&Symbol::new("AAPL")];
+    let dates: Vec<_> = bars.iter().map(|b| b.date).collect();
+    assert_eq!(dates, vec![d(2026, 11, 3), d(2026, 11, 4)]);
+    assert_eq!(bars[0].close, 2.0);
 }
