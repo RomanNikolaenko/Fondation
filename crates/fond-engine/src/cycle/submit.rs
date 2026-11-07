@@ -928,12 +928,25 @@ async fn confirm_cancel(d: &Deps, id: &str) -> Result<Confirmed, CycleError> {
     }
 }
 
-/// Закрити позицію зараз (з UI, у будь-якому режимі рушія): намір на вихід
-/// `"{id виходу}-manual"` на сьогоднішню сесію (або наступну, якщо сьогодні торгів немає) і
-/// одразу Sell Market Day — тим самим шляхом, що й вихід перед відкриттям, зі свіжим знімком
-/// позицій брокера. Незавершені (ще не відправлені) наміри на вихід за тікером спершу
-/// скасовуються, щоб тікер не продали двічі. Повторний виклик після відправки повертає той
-/// самий намір.
+/// Номер спроби ручного закриття: `base` -> 1, `"{base}-{n}"` -> n (n ≥ 2); інший id — `None`.
+fn manual_attempt(base: &str, id: &str) -> Option<u32> {
+    let rest = id.strip_prefix(base)?;
+    if rest.is_empty() {
+        return Some(1);
+    }
+    rest.strip_prefix('-')?.parse().ok().filter(|n| *n >= 2)
+}
+
+/// Закрити позицію зараз (з UI, у будь-якому режимі рушія): намір на вихід на сьогоднішню
+/// сесію (або наступну, якщо сьогодні торгів немає) і одразу Sell Market Day — тим самим
+/// шляхом, що й вихід перед відкриттям, зі свіжим знімком позицій брокера. Незавершені (ще не
+/// відправлені) наміри на вихід за тікером спершу скасовуються, щоб тікер не продали двічі.
+///
+/// Перша спроба за сесію — `"{id виходу}-manual"`. Остання спроба:
+/// - `Approved` (виклик перервався) — продовжується;
+/// - `Submitted`/`Filled` (продаж відправлено чи виконано) — повертається як є, без продажу;
+/// - завершилась без продажу (`Failed`/`Cancelled`/`Expired`) — нова спроба
+///   `"{id виходу}-manual-{n}"`, n = кількість спроб + 1.
 pub async fn close_position_now(d: &Deps, symbol: &Symbol) -> Result<Intent, CycleError> {
     let today = utc_to_et(d.clock.now()).date_naive();
     let cal = trading_calendar(d, today).await?;
@@ -949,23 +962,35 @@ pub async fn close_position_now(d: &Deps, symbol: &Symbol) -> Result<Intent, Cyc
         )));
     };
     let p = &position.position;
-    let id = format!(
+    let base = format!(
         "{}-manual",
         intent_id(session, &p.strategy, symbol, IntentTag::Exit)
     );
-    let existing = d.store.intent(&id).await?;
-    match &existing {
-        Some(i) if matches!(i.status, IntentStatus::Submitted | IntentStatus::Filled) => {
-            return Ok(i.clone());
+    let latest = d
+        .store
+        .intents_for_session(session)
+        .await?
+        .into_iter()
+        .filter_map(|i| manual_attempt(&base, &i.id).map(|n| (n, i)))
+        .max_by_key(|(n, _)| *n);
+    // Спроби нумеруються підряд, тож наступний номер = кількість спроб + 1.
+    let (id, existing, previous) = match latest {
+        None => (base, None, None),
+        Some((_, i)) if i.status == IntentStatus::Approved => (i.id.clone(), Some(i), None),
+        Some((n, i))
+            if matches!(
+                i.status,
+                IntentStatus::Failed
+                    | IntentStatus::Cancelled
+                    | IntentStatus::Expired
+                    | IntentStatus::Rejected
+            ) =>
+        {
+            (format!("{base}-{}", n + 1), None, Some(i))
         }
-        Some(i) if i.status != IntentStatus::Approved => {
-            let why = i.error.as_deref().unwrap_or("без причини");
-            return Err(CycleError::Other(format!(
-                "Ручне закриття {symbol} на сесію {session} уже завершилось без продажу: {why}"
-            )));
-        }
-        _ => {}
-    }
+        // Продаж відправлено чи виконано: повтор нічого не продає.
+        Some((_, i)) => return Ok(i),
+    };
     let mut held = match observe(d, d.broker.positions().await) {
         Ok(positions) => broker_held(&positions),
         Err(e) => {
@@ -997,12 +1022,16 @@ pub async fn close_position_now(d: &Deps, symbol: &Symbol) -> Result<Intent, Cyc
                 error: None,
             };
             d.store.insert_intent(&intent).await?;
+            let retry = previous
+                .as_ref()
+                .map(|i| format!(" (попередня спроба {} завершилась без продажу)", i.id))
+                .unwrap_or_default();
             journal(
                 d,
                 EventKind::Intent,
                 Some(symbol),
                 Some(&id),
-                format!("Намір на вихід (вручну): {} шт.", p.qty),
+                format!("Намір на вихід (вручну): {} шт.{retry}", p.qty),
                 json!({
                     "kind": "exit",
                     "strategy": p.strategy,
@@ -1010,6 +1039,8 @@ pub async fn close_position_now(d: &Deps, symbol: &Symbol) -> Result<Intent, Cyc
                     "session": session,
                     "status": IntentStatus::Approved,
                     "manual": true,
+                    "previous": previous.as_ref().map(|i| &i.id),
+                    "previous_status": previous.as_ref().map(|i| i.status),
                 }),
             )
             .await?;
@@ -2350,5 +2381,141 @@ mod tests {
         let again = close_position_now(&dp, &sym("AAPL")).await.unwrap();
         assert_eq!(again, closed);
         assert_eq!(h.broker.submitted().len(), 2);
+    }
+
+    #[test]
+    fn manual_attempt_numbers() {
+        let base = "20261105-trend_pullback-AAPL-exit-manual";
+        assert_eq!(manual_attempt(base, base), Some(1));
+        assert_eq!(manual_attempt(base, &format!("{base}-2")), Some(2));
+        assert_eq!(manual_attempt(base, &format!("{base}-12")), Some(12));
+        assert_eq!(manual_attempt(base, &format!("{base}-1")), None);
+        assert_eq!(manual_attempt(base, &format!("{base}-x")), None);
+        assert_eq!(manual_attempt(base, &format!("{base}2")), None);
+        assert_eq!(
+            manual_attempt(base, "20261105-trend_pullback-AAPL-exit"),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn close_position_now_retries_after_attempt_without_sale() {
+        let (dp, h) = setup().await;
+        held_aapl(&dp, &h).await;
+        h.clock.set(et(session(), 10, 30));
+        let first_id = "20261105-trend_pullback-AAPL-exit-manual";
+        // Перша спроба: разовий збій перевірки ордера — `Failed`, нічого не скасовано й не
+        // продано.
+        h.broker.fail_next_lookup(&client_order_id(first_id));
+
+        let first = close_position_now(&dp, &sym("AAPL")).await.unwrap();
+
+        assert_eq!(first.id, first_id);
+        assert_eq!(first.status, IntentStatus::Failed);
+        assert!(h.broker.cancels().is_empty());
+        assert_eq!(h.broker.submitted().len(), 1);
+
+        // Друга спроба — новий намір `-manual-2`, продаж проходить.
+        let second = close_position_now(&dp, &sym("AAPL")).await.unwrap();
+
+        assert_eq!(second.id, format!("{first_id}-2"));
+        assert_eq!(second.status, IntentStatus::Submitted);
+        let sale = h.broker.submitted().last().cloned().unwrap();
+        assert_eq!(sale.client_order_id, client_order_id(&second.id));
+        assert_eq!(
+            (sale.side, sale.qty, sale.tif),
+            (Side::Sell, 10, TimeInForce::Day)
+        );
+        assert_eq!(intent(&dp, first_id).await.status, IntentStatus::Failed);
+        let note = format!(
+            "Намір на вихід (вручну): 10 шт. (попередня спроба {first_id} завершилась без продажу)"
+        );
+        assert!(journal_messages(&dp).await.contains(&note));
+
+        // Денний продаж минув без виконання: звірка скасовує намір і знову ставить стоп.
+        h.broker.expire(second.broker_order_id.as_deref().unwrap());
+        reconcile(&dp).await.unwrap();
+        assert_eq!(
+            intent(&dp, &second.id).await.status,
+            IntentStatus::Cancelled
+        );
+        let reprotected = dp.store.positions().await.unwrap()[0]
+            .stop_order_id
+            .clone()
+            .unwrap();
+
+        // Третя спроба — `-manual-3`: новий стоп скасовано, продаж знову подано.
+        let third = close_position_now(&dp, &sym("AAPL")).await.unwrap();
+
+        assert_eq!(third.id, format!("{first_id}-3"));
+        assert_eq!(third.status, IntentStatus::Submitted);
+        assert_eq!(order_status(&h, &reprotected).await, OrderStatus::Canceled);
+        let sales: Vec<String> = h
+            .broker
+            .submitted()
+            .into_iter()
+            .filter(|r| r.order_type == OrderType::Market)
+            .map(|r| r.client_order_id)
+            .collect();
+        assert_eq!(
+            sales,
+            vec![client_order_id(&second.id), client_order_id(&third.id)]
+        );
+    }
+
+    #[tokio::test]
+    async fn close_position_now_resumes_live_manual_intent() {
+        let (dp, h) = setup().await;
+        held_aapl(&dp, &h).await;
+        h.clock.set(et(session(), 10, 30));
+        // Попередній виклик створив намір і перервався до відправки.
+        let live = Intent {
+            id: "20261105-trend_pullback-AAPL-exit-manual".into(),
+            ..approved_exit("AAPL", 10)
+        };
+        insert(&dp, &[&live]).await;
+
+        let closed = close_position_now(&dp, &sym("AAPL")).await.unwrap();
+
+        assert_eq!(closed.id, live.id);
+        assert_eq!(closed.status, IntentStatus::Submitted);
+        assert_eq!(
+            dp.store.intent(&format!("{}-2", live.id)).await.unwrap(),
+            None
+        );
+        let sells: Vec<OrderRequest> = h
+            .broker
+            .submitted()
+            .into_iter()
+            .filter(|r| r.side == Side::Sell)
+            .collect();
+        assert_eq!(sells.len(), 1);
+        assert_eq!(sells[0].client_order_id, client_order_id(&live.id));
+    }
+
+    #[tokio::test]
+    async fn close_position_now_does_not_repeat_completed_sale() {
+        let (dp, h) = setup().await;
+        held_aapl(&dp, &h).await;
+        h.clock.set(et(session(), 10, 30));
+        let closed = close_position_now(&dp, &sym("AAPL")).await.unwrap();
+        // Продано 4 із 10, решта денного ордера минула: звірка позначає вихід виконаним.
+        let sale = closed.broker_order_id.clone().unwrap();
+        h.broker.fill(&sale, dec!(100.00), 4);
+        h.broker.expire(&sale);
+        reconcile(&dp).await.unwrap();
+        let done = intent(&dp, &closed.id).await;
+        assert_eq!(done.status, IntentStatus::Filled);
+        assert_eq!(dp.store.positions().await.unwrap()[0].position.qty, 6);
+        let before = h.broker.submitted().len();
+
+        let again = close_position_now(&dp, &sym("AAPL")).await.unwrap();
+
+        assert_eq!(again, done);
+        assert_eq!(h.broker.submitted().len(), before, "продаж не повторюється");
+        assert_eq!(
+            dp.store.intent(&format!("{}-2", closed.id)).await.unwrap(),
+            None
+        );
     }
 }
