@@ -237,6 +237,59 @@ async fn cycle_step_roundtrip() {
 }
 
 #[tokio::test]
+async fn clear_step_removes_only_that_record() {
+    let s = Store::open_in_memory().await.unwrap();
+    let date = d(2026, 1, 5);
+    for step in [StepName::PreOpenSubmit, StepName::ApprovalDeadline] {
+        s.mark_step(date, step, StepStatus::Running, t(14, 0), None)
+            .await
+            .unwrap();
+    }
+    s.mark_step(
+        d(2026, 1, 6),
+        StepName::PreOpenSubmit,
+        StepStatus::Done,
+        t(14, 0),
+        None,
+    )
+    .await
+    .unwrap();
+
+    s.clear_step(date, StepName::PreOpenSubmit).await.unwrap();
+    assert_eq!(
+        s.step_status(date, StepName::PreOpenSubmit).await.unwrap(),
+        None
+    );
+    assert_eq!(
+        s.step_status(date, StepName::ApprovalDeadline)
+            .await
+            .unwrap(),
+        Some((StepStatus::Running, t(14, 0)))
+    );
+    assert_eq!(
+        s.step_status(d(2026, 1, 6), StepName::PreOpenSubmit)
+            .await
+            .unwrap(),
+        Some((StepStatus::Done, t(14, 0)))
+    );
+    // Немає запису — не помилка; після очищення крок знову можна позначити.
+    s.clear_step(date, StepName::Analysis).await.unwrap();
+    s.mark_step(
+        date,
+        StepName::PreOpenSubmit,
+        StepStatus::Running,
+        t(14, 2),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        s.step_status(date, StepName::PreOpenSubmit).await.unwrap(),
+        Some((StepStatus::Running, t(14, 2)))
+    );
+}
+
+#[tokio::test]
 async fn engine_mode_defaults_to_running_and_roundtrips() {
     let s = Store::open_in_memory().await.unwrap();
     assert_eq!(s.engine_mode().await.unwrap(), EngineMode::Running);

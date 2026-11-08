@@ -117,4 +117,14 @@ impl Store {
         }
         Ok(())
     }
+
+    /// Видаляє запис кроку: розклад знову вважатиме його невиконаним.
+    pub async fn clear_step(&self, date: NaiveDate, step: StepName) -> Result<()> {
+        sqlx::query("DELETE FROM cycle_runs WHERE trading_date = ? AND step = ?")
+            .bind(fmt_date(date))
+            .bind(step.as_str())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
 }

@@ -1,9 +1,6 @@
 //! Чистий планувальник кроків циклу: що саме треба виконати зараз.
 //! Враховує догін після перезапуску та час America/New_York (включно з DST).
 
-// Споживачі (цикл рушія) з'являються в наступних задачах.
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 
 use chrono::{DateTime, Duration, NaiveDate, Utc};
@@ -106,6 +103,10 @@ pub fn due_steps(i: &ScheduleInput) -> Vec<DueStep> {
 }
 
 /// Найближчий майбутній невиконаний крок розкладу (для статусу в UI).
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "статус API (Task 22) показує наступний крок")
+)]
 pub fn next_step_at(i: &ScheduleInput) -> Option<(StepName, DateTime<Utc>)> {
     let today = utc_to_et(i.now).date_naive();
     let mut sessions = Vec::new();

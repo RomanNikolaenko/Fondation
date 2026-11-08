@@ -1,16 +1,35 @@
 mod config_io;
-// Кроки циклу, залежності й шину подій підключає runtime у Task 21.
-#[allow(dead_code, reason = "споживач (runtime) з'являється в Task 21")]
+// Споживачі нижче (API, запуск у main) з'являються в Task 22; у тестах усе використано.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "pause/resume/kill і ручне закриття викликає API у Task 22"
+    )
+)]
 mod cycle;
-#[allow(dead_code, reason = "споживач (runtime) з'являється в Task 21")]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "LiveDepsFactory і пошук галузі під'єднує Task 22")
+)]
 mod deps;
-#[allow(dead_code, reason = "споживач (runtime) з'являється в Task 21")]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "шину створює main, а підписується WebSocket у Task 22"
+    )
+)]
 mod events;
-#[allow(dead_code, reason = "споживач (runtime) з'являється в Task 21")]
 mod health;
 mod lock;
 mod logging;
 mod paths;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Engine запускає main разом з API у Task 22")
+)]
+mod runtime;
 mod schedule;
 
 use std::path::PathBuf;
