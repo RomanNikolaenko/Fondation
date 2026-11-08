@@ -6,6 +6,9 @@ import { UK } from './i18n/uk';
 const placeholder = () =>
   import('./features/placeholder').then((m) => m.Placeholder);
 
+const overview = () =>
+  import('./features/overview/overview').then((m) => m.Overview);
+
 export const routes: Routes = [
   {
     path: 'welcome',
@@ -16,7 +19,7 @@ export const routes: Routes = [
     loadComponent: () => import('./shell/shell').then((m) => m.Shell),
     canActivate: [disclaimerGuard],
     children: [
-      { path: '', pathMatch: 'full', loadComponent: placeholder, data: { title: UK.nav.overview } },
+      { path: '', pathMatch: 'full', loadComponent: overview },
       {
         path: 'approvals',
         loadComponent: placeholder,

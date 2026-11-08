@@ -1,0 +1,114 @@
+<section class="overview">
+  <header class="head">
+    <h1>{{ text.nav.overview }}</h1>
+    <div class="actions">
+      <button
+        type="button"
+        class="secondary"
+        [disabled]="busy() || store.modeState() === 'unknown'"
+        (click)="togglePause()"
+      >
+        {{ pauseLabel() }}
+      </button>
+      <button type="button" class="danger" (click)="openKill()">Аварійна зупинка</button>
+    </div>
+  </header>
+
+  @if (error()) {
+    <p class="error" role="alert">{{ error() }}</p>
+  }
+
+  <div class="grid">
+    <article class="card">
+      <h2>Рушій</h2>
+      <p class="value">{{ modeText() }}</p>
+      @if (store.status()?.engine_mode?.reason; as reason) {
+        <p class="muted">{{ reason }}</p>
+      }
+      @if (store.status()?.next_step; as step) {
+        <p class="muted">Наступний крок: {{ nextStepAt(step.at) }}</p>
+      } @else {
+        <p class="muted">Наступний крок: —</p>
+      }
+      @if (store.status()?.needs_setup?.length) {
+        <p class="warning">
+          Додайте ключі API:
+          <a routerLink="/settings">перейти в налаштування</a>
+        </p>
+      }
+    </article>
+
+    <article class="card">
+      <h2>Капітал</h2>
+      <dl>
+        <div>
+          <dt>Equity</dt>
+          <dd>{{ account()?.equity | money }}</dd>
+        </div>
+        <div>
+          <dt>За день</dt>
+          <dd [class.loss]="isLoss(account()?.day_pnl)">
+            {{ account()?.day_pnl | money }}
+          </dd>
+        </div>
+        <div>
+          <dt>За тиждень</dt>
+          <dd [class.loss]="isLoss(account()?.week_pnl)">
+            {{ account()?.week_pnl | money }}
+          </dd>
+        </div>
+      </dl>
+    </article>
+
+    <article class="card">
+      <h2>Позиції</h2>
+      <dl>
+        <div>
+          <dt>Кількість</dt>
+          <dd>{{ positions().length }}</dd>
+        </div>
+        <div>
+          <dt>Експозиція</dt>
+          <dd>{{ exposureText() }}</dd>
+        </div>
+      </dl>
+    </article>
+
+    <article class="card">
+      <h2>Ліміти</h2>
+      <dl>
+        <div>
+          <dt>Позиції</dt>
+          <dd>{{ positionsLimitText() }}</dd>
+        </div>
+        <div>
+          <dt>Експозиція</dt>
+          <dd>{{ exposureText() }} / {{ exposureLimitText() }}</dd>
+        </div>
+        <div>
+          <dt>Денний результат</dt>
+          <dd [class.loss]="dailyBreached()">{{ dailyText() }}</dd>
+        </div>
+      </dl>
+    </article>
+
+    <article class="card card--wide">
+      <h2>Стрічка подій</h2>
+      @if (feed().length === 0) {
+        <p class="muted">Подій ще немає.</p>
+      } @else {
+        <ul class="feed">
+          @for (event of feed(); track event.id) {
+            <li>
+              <span class="when">{{ event.at | etKyivTime }}</span>
+              <span class="kind">{{ event.kind }}</span>
+              <span class="message">{{ event.message }}</span>
+            </li>
+          }
+        </ul>
+      }
+    </article>
+  </div>
+
+  <app-kill-switch-dialog />
+</section>
