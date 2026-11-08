@@ -158,18 +158,21 @@ fn entry_fills_next_open_when_below_limit() {
     assert_eq!((tr.symbol.as_str(), tr.entry_date), ("AAA", after(0)));
     approx(tr.entry_price, entry);
     assert_eq!(tr.qty, 148);
-    // Останній день: вихід за close без прослизання.
+    // Останній день: ліквідація за close з прослизанням.
     assert_eq!(
         (tr.exit_date, &tr.exit_reason),
         (after(0), &ExitReason::EndOfTest)
     );
-    approx(tr.exit_price, 100.6);
-    approx(tr.pnl, (100.6 - entry) * 148.0);
+    approx(tr.exit_price, 100.6 * (1.0 - SLIP));
+    approx(tr.pnl, (100.6 * (1.0 - SLIP) - entry) * 148.0);
 
     assert_eq!(r.equity.len(), 2);
-    assert!(!r.equity[0].in_market && r.equity[1].in_market);
+    assert!(!r.equity[0].in_market && !r.equity[1].in_market);
     approx(r.equity[0].equity, 100_000.0);
-    approx(r.equity[1].equity, 100_000.0 + (100.6 - entry) * 148.0);
+    approx(
+        r.equity[1].equity,
+        100_000.0 + (100.6 * (1.0 - SLIP) - entry) * 148.0,
+    );
     approx(r.equity[0].benchmark, 100_000.0);
     approx(r.equity[1].benchmark, 100_000.0 * 1.001);
 }
@@ -476,11 +479,11 @@ fn commissions_charged_on_both_sides() {
         commission_min: 1.0,
     };
     let r = run_backtest(&rq, &data_with(&[NORMAL])).unwrap();
-    let gross = (100.6 - 100.5 * (1.0 + SLIP)) * 148.0;
+    let gross = (100.6 * (1.0 - SLIP) - 100.5 * (1.0 + SLIP)) * 148.0;
     // max(148 · 0.01, 1.0) = 1.48 за кожну сторону.
     approx(r.trades[0].pnl, gross - 2.0 * 1.48);
-    // Крива на закритті містить лише комісію входу: EndOfTest — після закриття.
-    approx(r.equity[1].equity, 100_000.0 + gross - 1.48);
+    // Ліквідація останнього дня відбувається до фіксації кривої, тож обидві комісії в equity.
+    approx(r.equity[1].equity, 100_000.0 + gross - 2.0 * 1.48);
 }
 
 #[test]

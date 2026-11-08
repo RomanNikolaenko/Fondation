@@ -241,10 +241,11 @@ impl Sim {
 
     /// Кінець тесту: усі позиції закриваються за останнім закриттям.
     pub(crate) fn close_all(&mut self, date: NaiveDate) {
+        let slip = self.slip;
         let all: Vec<(Symbol, f64)> = self
             .positions
             .iter()
-            .map(|(s, p)| (s.clone(), p.last_close))
+            .map(|(s, p)| (s.clone(), p.last_close * (1.0 - slip)))
             .collect();
         for (symbol, price) in all {
             self.close(&symbol, date, price, ExitReason::EndOfTest);
@@ -276,5 +277,57 @@ impl Sim {
             qty: p.qty,
             exit_reason: reason,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn costs() -> CostModel {
+        CostModel {
+            slippage_bps: 100.0,
+            commission_per_share: 0.01,
+            commission_min: 1.0,
+        }
+    }
+
+    #[test]
+    fn close_all_applies_slippage_and_commission() {
+        let date = NaiveDate::from_ymd_opt(2026, 11, 5).unwrap();
+        let symbol = Symbol::new("AAPL");
+        let bar = Bar {
+            date,
+            open: 100.0,
+            high: 101.0,
+            low: 99.0,
+            close: 100.0,
+            volume: 1_000_000.0,
+        };
+        let mut bars = HashMap::new();
+        bars.insert(symbol.clone(), vec![bar]);
+
+        let mut sim = Sim::new(10_000.0, costs());
+        sim.queue_entry(PendingEntry {
+            symbol: symbol.clone(),
+            strategy: StrategyId::new("breakout"),
+            sector: "Tech".into(),
+            qty: 10,
+            limit: 105.0,
+            stop: 95.0,
+            take_profit: None,
+        });
+        sim.open(date, &bars);
+        sim.mark_to_market(date, &bars);
+        sim.close_all(date);
+
+        // Вхід: 100 * 1.01 = 101, комісія max(0.10, 1.00) = 1.00.
+        // Вихід: last_close 100 * 0.99 = 99, комісія 1.00.
+        assert!(!sim.has_positions());
+        assert!((sim.cash() - 9_978.0).abs() < 1e-9);
+        let trades = sim.into_trades();
+        assert_eq!(trades.len(), 1);
+        assert!((trades[0].exit_price - 99.0).abs() < 1e-9);
+        assert!((trades[0].pnl - (-22.0)).abs() < 1e-9);
     }
 }

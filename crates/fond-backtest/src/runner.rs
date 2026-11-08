@@ -133,6 +133,11 @@ impl<'a> Run<'a> {
 
         self.sim.open(t, bars);
         self.sim.intraday(t, bars);
+        // Останній день: ліквідація до фіксації equity, щоб метрики врахували
+        // прослизання й комісії закриття.
+        if last {
+            self.sim.close_all(t);
+        }
         let equity = self.sim.mark_to_market(t, bars);
 
         let prev = self.equity.last().map(|p| p.equity);
@@ -162,7 +167,6 @@ impl<'a> Run<'a> {
         let daily = daily_loss_breached(prev, Some(equity), limits.daily_loss_limit);
 
         if last {
-            self.sim.close_all(t);
             return;
         }
         let blocked = if self.weekly_blocked {
