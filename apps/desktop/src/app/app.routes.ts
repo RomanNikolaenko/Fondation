@@ -35,7 +35,7 @@ export const routes: Routes = [
         loadComponent: placeholder,
         data: { title: UK.nav.signals },
       },
-      { path: 'chart', loadComponent: placeholder, data: { title: UK.nav.chart } },
+      { path: 'chart', loadComponent: () => import('./features/chart/chart').then((m) => m.Chart) },
       {
         path: 'journal',
         loadComponent: placeholder,

@@ -1,0 +1,49 @@
+<section class="chart-screen">
+  <header class="head">
+    <h1>Графік</h1>
+    <form class="controls" (submit)="onSubmit($event)">
+      <label>
+        <span>Тікер</span>
+        <input
+          type="text"
+          name="symbol"
+          autocomplete="off"
+          [value]="symbol()"
+          (input)="setSymbol($event)"
+        />
+      </label>
+      <label>
+        <span>Від</span>
+        <input type="date" name="from" [value]="from()" (input)="setFrom($event)" />
+      </label>
+      <label>
+        <span>До</span>
+        <input type="date" name="to" [value]="to()" (input)="setTo($event)" />
+      </label>
+      <button type="submit" [disabled]="loading()">
+        {{ loading() ? 'Завантаження…' : 'Показати' }}
+      </button>
+    </form>
+  </header>
+
+  @if (error()) {
+    <p class="error" role="alert">{{ error() }}</p>
+  }
+
+  @if (hasBacktest()) {
+    <p class="hint">Позначки — угоди бектесту.</p>
+  } @else {
+    <p class="hint">Позначки — входи й виходи з журналу.</p>
+  }
+
+  <fond-candle-chart
+    [bars]="bars()"
+    [markers]="markers()"
+    [overlays]="overlays()"
+    [height]="480"
+  />
+
+  @if (!loading() && bars().length === 0 && !error()) {
+    <p class="muted">Немає даних за вибраний період.</p>
+  }
+</section>
