@@ -44,6 +44,7 @@ pub struct Account {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct BrokerPosition {
     pub symbol: Symbol,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub qty: i64,
     #[cfg_attr(feature = "ts", ts(type = "string"))]
     pub avg_entry_price: Decimal,

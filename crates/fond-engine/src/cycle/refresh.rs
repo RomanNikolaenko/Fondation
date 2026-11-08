@@ -74,7 +74,10 @@ pub async fn refresh_market_data(
 }
 
 /// Відсортований набір без дублікатів.
-async fn refresh_symbols(d: &Deps, cfg: &EngineConfig) -> Result<Vec<Symbol>, CycleError> {
+pub(crate) async fn refresh_symbols(
+    d: &Deps,
+    cfg: &EngineConfig,
+) -> Result<Vec<Symbol>, CycleError> {
     let mut set: BTreeSet<Symbol> = d
         .store
         .universe(false)

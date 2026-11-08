@@ -8,10 +8,6 @@ pub struct DataDir {
     pub root: PathBuf,
 }
 
-#[allow(
-    dead_code,
-    reason = "db() і discovery() використовує runtime у Task 22"
-)]
 impl DataDir {
     /// Типовий каталог: `<config_dir>/Fond`.
     pub fn default_root() -> io::Result<PathBuf> {

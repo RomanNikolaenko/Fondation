@@ -30,12 +30,13 @@ use crate::cycle::submit::{expire_pending, mark_missed, run_pre_open_submit};
 use crate::cycle::{CALENDAR_SPAN_DAYS, CycleError, journal_dto};
 use crate::deps::{Deps, DepsFactory, SetupError};
 use crate::events::EventBus;
+use crate::jobs::Jobs;
 use crate::schedule::{DueStep, ScheduleInput, StepRecord, due_steps, latest_analysis_date};
 
 /// Період тіку.
 pub const TICK_EVERY: std::time::Duration = std::time::Duration::from_secs(30);
 /// Запис `Running`, старший за це, вважається покинутим (збій посеред кроку).
-const STALE_AFTER_MINUTES: i64 = 15;
+pub(crate) const STALE_AFTER_MINUTES: i64 = 15;
 /// Календар довантажується, якщо у сховищі немає жодної сесії на `[сьогодні, +10 днів]`.
 const CALENDAR_LOOKAHEAD_DAYS: i64 = 10;
 /// Пауза перед повтором звірки чи завантаження календаря після збою.
@@ -145,6 +146,8 @@ pub struct Engine {
     calendar_retry: RetryGate,
     /// Остання помилка тіку, уже записана в журнал (повтор не дублюється).
     last_tick_error: StdMutex<Option<String>>,
+    /// Фонові завдання API (бектест, завантаження історії).
+    jobs: Jobs,
 }
 
 impl Engine {
@@ -172,6 +175,7 @@ impl Engine {
             reconcile_retry: RetryGate::default(),
             calendar_retry: RetryGate::default(),
             last_tick_error: StdMutex::new(None),
+            jobs: Jobs::default(),
         })
     }
 
@@ -305,6 +309,22 @@ impl Engine {
 
     pub fn secrets(&self) -> Arc<dyn SecretStore> {
         self.secrets.clone()
+    }
+
+    pub fn store(&self) -> &Store {
+        &self.store
+    }
+
+    pub fn clock(&self) -> &Arc<dyn Clock> {
+        &self.clock
+    }
+
+    pub fn bus(&self) -> &EventBus {
+        &self.bus
+    }
+
+    pub fn jobs(&self) -> &Jobs {
+        &self.jobs
     }
 
     /// Замок кроків циклу. Дії оператора (схвалення, пауза, аварійна зупинка, ручне
@@ -547,12 +567,16 @@ impl Engine {
     }
 
     /// Запис у журнал і на шину без `Deps` (залежностей може не бути).
-    async fn record(
-        &self,
-        kind: EventKind,
-        message: String,
-        data: Value,
-    ) -> Result<(), StoreError> {
+    pub(crate) async fn record_event(&self, e: &NewEvent) -> Result<(), StoreError> {
+        let stored = self.store.append_event(self.clock.now(), e).await?;
+        self.bus.publish(EngineEventDto::Journal {
+            event: journal_dto(&stored),
+        });
+        Ok(())
+    }
+
+    /// Як [`Self::record_event`], але збій журналу лише логується.
+    pub(crate) async fn note(&self, kind: EventKind, message: String, data: Value) {
         let e = NewEvent {
             kind,
             symbol: None,
@@ -560,16 +584,7 @@ impl Engine {
             message,
             data,
         };
-        let stored = self.store.append_event(self.clock.now(), &e).await?;
-        self.bus.publish(EngineEventDto::Journal {
-            event: journal_dto(&stored),
-        });
-        Ok(())
-    }
-
-    /// Як [`Self::record`], але збій журналу лише логується.
-    async fn note(&self, kind: EventKind, message: String, data: Value) {
-        if let Err(e) = self.record(kind, message, data).await {
+        if let Err(e) = self.record_event(&e).await {
             tracing::error!(error = %e, "не вдалося записати подію в журнал");
         }
     }

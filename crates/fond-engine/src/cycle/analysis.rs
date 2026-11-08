@@ -98,6 +98,15 @@ fn scan_label(key: &str) -> &'static str {
     }
 }
 
+/// Причина відсіву сканером для UI (українською; для `BadData` — з описом проблеми).
+pub(crate) fn scan_reject_text(r: &ScanReject) -> String {
+    let label = scan_label(scan_key(r));
+    match r {
+        ScanReject::BadData(detail) => format!("{label}: {detail}"),
+        _ => label.to_string(),
+    }
+}
+
 /// Результат скану: бари тікерів universe і ті, що пройшли.
 struct Scanned {
     bars: HashMap<Symbol, Vec<Bar>>,

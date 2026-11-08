@@ -135,7 +135,9 @@ pub struct NewsJudgeRequest {
 pub struct NewsJudgment {
     pub verdict: NewsVerdict,
     pub model: String,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub input_tokens: u64,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub output_tokens: u64,
 }
 

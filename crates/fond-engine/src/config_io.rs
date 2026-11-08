@@ -65,7 +65,6 @@ pub fn save_atomic(path: &Path, cfg: &EngineConfig) -> Result<(), ConfigError> {
     Ok(())
 }
 
-#[allow(dead_code, reason = "викликається з runtime у Task 22")]
 pub fn write_discovery(path: &Path, d: &Discovery) -> io::Result<()> {
     let json = serde_json::to_vec_pretty(d).map_err(io::Error::other)?;
     write_atomic(path, &json)

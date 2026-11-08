@@ -33,6 +33,7 @@ keyring = { version = "4", default-features = false, features = ["windows-native
 axum = { version = "0.8", features = ["ws"] }
 tower-http = { version = "0.7", features = ["trace"] }
 tokio-tungstenite = "0.30"
+tower = { version = "0.5", features = ["util"] }
 futures = "0.3"
 ts-rs = { version = "12", features = ["chrono-impl", "serde-json-impl"] }
 insta = { version = "1.49", features = ["json"] }

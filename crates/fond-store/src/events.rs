@@ -41,7 +41,8 @@ impl EventKind {
         }
     }
 
-    fn parse(s: &str) -> Result<Self> {
+    /// Зворотне до [`EventKind::as_str`]; невідомий тип — `StoreError::Corrupt`.
+    pub fn parse(s: &str) -> Result<Self> {
         Ok(match s {
             "cycle" => EventKind::Cycle,
             "scan" => EventKind::Scan,

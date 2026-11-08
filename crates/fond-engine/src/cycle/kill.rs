@@ -11,16 +11,21 @@ use fond_core::orders::{
     BrokerOrder, OrderClass, OrderRequest, OrderStatus, OrderType, Side, TimeInForce,
 };
 use fond_core::portfolio::TrackedPosition;
+use fond_core::traits::Clock;
 use fond_core::types::{EngineMode, Symbol};
-use fond_store::{EventKind, StoreError};
+use fond_store::{EventKind, NewEvent, Store, StoreError};
 use serde_json::json;
 
 use super::reconcile::{broker_failure, ensure_stop, flatten, observe, reconcile};
-use super::{CycleError, journal};
+use super::{CycleError, journal, journal_dto};
 use crate::deps::Deps;
+use crate::events::EventBus;
 
 /// Причина режиму `Killed`, коли зупинку ввімкнув користувач.
 pub const KILL_REASON: &str = "Аварійна зупинка користувачем";
+
+/// Причина паузи, яку поставив користувач.
+pub const USER_PAUSE_REASON: &str = "Пауза користувачем";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct KillReport {
@@ -58,6 +63,30 @@ pub async fn pause_changed(d: &Deps, reason: &str) -> Result<bool, CycleError> {
     Ok(true)
 }
 
+/// Пауза з UI: лише з `Running` (аварійна зупинка чи інша пауза не змінюються). Журнал і
+/// `StatusChanged` — лише коли режим справді змінено; `AutoPaused` не публікується, бо паузу
+/// поставив сам користувач. `true`, якщо режим змінено.
+pub async fn pause_by_user(d: &Deps) -> Result<bool, CycleError> {
+    if !d
+        .store
+        .pause_if_running(USER_PAUSE_REASON, d.clock.now())
+        .await?
+    {
+        return Ok(false);
+    }
+    journal(
+        d,
+        EventKind::Pause,
+        None,
+        None,
+        format!("{USER_PAUSE_REASON}: нові входи заборонено"),
+        json!({ "reason": USER_PAUSE_REASON }),
+    )
+    .await?;
+    d.bus.publish(EngineEventDto::StatusChanged);
+    Ok(true)
+}
+
 /// `Paused` або `Killed` -> `Running` (у журналі — з якого режиму); у `Running` нічого не робить.
 pub async fn resume(d: &Deps) -> Result<(), CycleError> {
     let previous = d.store.engine_mode().await?;
@@ -82,8 +111,45 @@ pub async fn resume(d: &Deps) -> Result<(), CycleError> {
     Ok(())
 }
 
-/// Аварійна зупинка: режим `Killed` (безумовно), скасування намірів `PendingApproval` і
-/// `Approved`, скасування відкритих ордерів (батьківських і ніг).
+/// Перша частина аварійної зупинки — без `Deps` і без замка кроків, щоб не чекати на довгий
+/// крок (аналіз): режим `Killed` (безумовно), запис у журналі й подія `Killed`. Відправка
+/// перевіряє режим і нічого не надсилає; скасування й закриття робить [`execute_kill`].
+pub async fn announce_kill(
+    store: &Store,
+    clock: &dyn Clock,
+    bus: &EventBus,
+    close_positions: bool,
+) -> Result<(), CycleError> {
+    let mode = EngineMode::Killed {
+        reason: KILL_REASON.into(),
+    };
+    store.set_engine_mode(&mode, clock.now()).await?;
+    let what = if close_positions {
+        "нові ордери заборонено, позиції закриваються"
+    } else {
+        "нові ордери заборонено, позиції лишаються під стопами"
+    };
+    let e = NewEvent {
+        kind: EventKind::Kill,
+        symbol: None,
+        intent_id: None,
+        message: format!("{KILL_REASON}: {what}"),
+        data: json!({ "close_positions": close_positions }),
+    };
+    let stored = store.append_event(clock.now(), &e).await?;
+    bus.publish(EngineEventDto::Journal {
+        event: journal_dto(&stored),
+    });
+    bus.publish(EngineEventDto::Killed {
+        reason: KILL_REASON.into(),
+    });
+    Ok(())
+}
+
+/// Друга частина аварійної зупинки (під замком кроків, після [`announce_kill`]): режим
+/// `Killed` ставиться ще раз (безумовно, без журналу — його могли зняти, поки дія чекала на
+/// замок), далі скасування намірів `PendingApproval` і `Approved` та відкритих ордерів
+/// (батьківських і ніг).
 ///
 /// Без закриття позицій лишаються робочі захисні стопи: стоп-ордери відстежуваних позицій і
 /// Sell Stop, чий батьківський ордер уже не відкритий (нога виконаного входу, який ще не
@@ -97,29 +163,12 @@ pub async fn resume(d: &Deps) -> Result<(), CycleError> {
 /// лише коли його ордер завершився без виконання й позиції за тікером не було; інакше він
 /// лишається `Submitted`, щоб звірка взяла на облік і захистила те, що не продано.
 /// Невдале скасування чи продаж — подія в журналі, а не помилка.
-pub async fn kill(d: &Deps, close_positions: bool) -> Result<KillReport, CycleError> {
+pub async fn execute_kill(d: &Deps, close_positions: bool) -> Result<KillReport, CycleError> {
     let mut report = KillReport::default();
     let mode = EngineMode::Killed {
         reason: KILL_REASON.into(),
     };
     d.store.set_engine_mode(&mode, d.clock.now()).await?;
-    let what = if close_positions {
-        "нові ордери заборонено, позиції закриваються"
-    } else {
-        "нові ордери заборонено, позиції лишаються під стопами"
-    };
-    journal(
-        d,
-        EventKind::Kill,
-        None,
-        None,
-        format!("{KILL_REASON}: {what}"),
-        json!({ "close_positions": close_positions }),
-    )
-    .await?;
-    d.bus.publish(EngineEventDto::Killed {
-        reason: KILL_REASON.into(),
-    });
 
     let waiting = d
         .store
@@ -462,6 +511,12 @@ mod tests {
         journal_messages, session, submit_entry, submit_exit, sym,
     };
     use super::*;
+
+    /// Повна аварійна зупинка, як її виконує API: оголошення, далі скасування й закриття.
+    async fn kill(d: &Deps, close_positions: bool) -> Result<KillReport, CycleError> {
+        announce_kill(&d.store, d.clock.as_ref(), &d.bus, close_positions).await?;
+        execute_kill(d, close_positions).await
+    }
 
     async fn setup() -> (Deps, Handles) {
         let (dp, h) = fixture().await;

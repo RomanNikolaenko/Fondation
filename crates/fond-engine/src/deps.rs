@@ -11,7 +11,8 @@ use fond_adapters::finnhub::FinnhubClient;
 use fond_adapters::http::Secret;
 use fond_adapters::secrets::SecretStore;
 use fond_api::config::EngineConfig;
-use fond_core::error::{DataError, JudgeError};
+use fond_api::dto::{CheckDto, VerifyResultDto};
+use fond_core::error::{BrokerError, DataError, JudgeError};
 use fond_core::keys::SecretKey;
 use fond_core::traits::{
     Broker, Clock, EarningsCalendar, MarketData, NewsJudge, NewsJudgeRequest, NewsJudgment,
@@ -202,6 +203,91 @@ struct NewsOff;
 impl NewsJudge for NewsOff {
     async fn judge(&self, _req: &NewsJudgeRequest) -> Result<NewsJudgment, JudgeError> {
         Err(JudgeError::Other("фільтр новин вимкнено".into()))
+    }
+}
+
+const NO_KEY: &str = "немає ключа";
+const KEY_REJECTED: &str = "ключ відхилено (401)";
+
+fn passed() -> CheckDto {
+    CheckDto {
+        ok: true,
+        message: None,
+    }
+}
+
+fn failed(message: impl Into<String>) -> CheckDto {
+    CheckDto {
+        ok: false,
+        message: Some(message.into()),
+    }
+}
+
+/// Непорожній ключ або `None`; збій сховища — текст без значення ключа.
+fn stored_key(secrets: &dyn SecretStore, k: SecretKey) -> Result<Option<Secret>, String> {
+    match secrets.get(k) {
+        Ok(Some(v)) if !v.expose().trim().is_empty() => Ok(Some(v)),
+        Ok(_) => Ok(None),
+        Err(e) => Err(format!("не вдалося прочитати ключ: {e}")),
+    }
+}
+
+/// Перевірка збережених ключів: Alpaca (paper) — `account()`, Finnhub — `industry("AAPL")`,
+/// Claude — `verify_key()`. Сервіс без ключа не викликається («немає ключа»). Повідомлення
+/// описують лише тип помилки, значень ключів у них немає.
+pub async fn verify_secrets(
+    secrets: &dyn SecretStore,
+    clock: Arc<dyn Clock>,
+    cfg: &EngineConfig,
+) -> VerifyResultDto {
+    let alpaca = match (
+        stored_key(secrets, SecretKey::AlpacaKeyId),
+        stored_key(secrets, SecretKey::AlpacaSecret),
+    ) {
+        (Err(e), _) | (_, Err(e)) => failed(e),
+        (Ok(Some(key_id)), Ok(Some(secret))) => {
+            let client = AlpacaClient::new(AlpacaConfig::paper(key_id, secret), clock);
+            match client.account().await {
+                Ok(_) => passed(),
+                Err(BrokerError::Unauthorized) => failed(KEY_REJECTED),
+                Err(e) => failed(e.to_string()),
+            }
+        }
+        _ => failed(NO_KEY),
+    };
+    let finnhub = match stored_key(secrets, SecretKey::FinnhubApiKey) {
+        Err(e) => failed(e),
+        Ok(None) => failed(NO_KEY),
+        Ok(Some(key)) => {
+            let client = FinnhubClient::new(static_url(FINNHUB_BASE), key);
+            match client.industry(&Symbol::new("AAPL")).await {
+                Ok(_) => passed(),
+                Err(DataError::Unauthorized) => failed(KEY_REJECTED),
+                Err(e) => failed(e.to_string()),
+            }
+        }
+    };
+    let anthropic = match stored_key(secrets, SecretKey::AnthropicApiKey) {
+        Err(e) => failed(e),
+        Ok(None) => failed(NO_KEY),
+        Ok(Some(api_key)) => {
+            let judge = ClaudeJudge::new(ClaudeConfig {
+                base: static_url(ANTHROPIC_BASE),
+                api_key,
+                model: cfg.news_filter.model.clone(),
+                effort: cfg.news_filter.effort.clone(),
+            });
+            match judge.verify_key().await {
+                Ok(()) => passed(),
+                Err(JudgeError::Unauthorized) => failed(KEY_REJECTED),
+                Err(e) => failed(e.to_string()),
+            }
+        }
+    };
+    VerifyResultDto {
+        alpaca,
+        finnhub,
+        anthropic,
     }
 }
 

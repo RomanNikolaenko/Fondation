@@ -4,6 +4,8 @@ use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::dto::HistoryJobDto;
+
 /// Запис журналу (`events` у SQLite) у вигляді для UI.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct JournalEventDto {
@@ -48,6 +50,15 @@ pub enum EngineEventDto {
         error: String,
     },
     StatusChanged,
+    /// Статус запуску бектесту змінився (`"running"`, `"done"`, `"failed"`).
+    BacktestStatus {
+        id: String,
+        status: String,
+    },
+    /// Прогрес завантаження історії.
+    HistoryProgress {
+        job: HistoryJobDto,
+    },
 }
 
 #[cfg(test)]

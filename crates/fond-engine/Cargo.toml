@@ -12,12 +12,17 @@ fond-store = { path = "../fond-store" }
 fond-adapters = { path = "../fond-adapters" }
 fond-api = { path = "../fond-api" }
 async-trait.workspace = true
+axum.workspace = true
 chrono.workspace = true
 clap.workspace = true
 dirs.workspace = true
 fs4.workspace = true
+futures.workspace = true
+rand.workspace = true
 rust_decimal.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+subtle.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 toml.workspace = true
@@ -31,6 +36,8 @@ fond-core = { path = "../fond-core", features = ["testkit"] }
 rust_decimal_macros.workspace = true
 sqlx.workspace = true
 tempfile.workspace = true
+tokio-tungstenite.workspace = true
+tower.workspace = true
 
 [lints]
 workspace = true

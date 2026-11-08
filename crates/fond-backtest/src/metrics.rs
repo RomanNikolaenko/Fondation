@@ -10,6 +10,7 @@ use crate::request::{BtTrade, EquityPoint};
 pub struct Metrics {
     pub cagr: f64,
     pub max_drawdown: f64,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub max_drawdown_days: i64,
     pub sharpe: f64,
     pub sortino: f64,

@@ -103,10 +103,6 @@ pub fn due_steps(i: &ScheduleInput) -> Vec<DueStep> {
 }
 
 /// Найближчий майбутній невиконаний крок розкладу (для статусу в UI).
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "статус API (Task 22) показує наступний крок")
-)]
 pub fn next_step_at(i: &ScheduleInput) -> Option<(StepName, DateTime<Utc>)> {
     let today = utc_to_et(i.now).date_naive();
     let mut sessions = Vec::new();
