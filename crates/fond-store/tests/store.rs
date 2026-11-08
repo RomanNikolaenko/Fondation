@@ -424,6 +424,74 @@ async fn manual_entries_add_and_remove() {
     assert!(s.universe(true).await.unwrap().is_empty());
 }
 
+fn manual(symbol: &str, sector: &str) -> UniverseEntry {
+    UniverseEntry {
+        symbol: Symbol::new(symbol),
+        name: format!("{symbol} Inc."),
+        sector: sector.into(),
+        source: UniverseSource::Manual,
+        excluded: false,
+    }
+}
+
+#[tokio::test]
+async fn import_manual_skips_existing_and_counts() {
+    let s = Store::open_in_memory().await.unwrap();
+    s.seed_universe_if_empty().await.unwrap();
+    s.set_excluded(&Symbol::new("AAPL"), true).await.unwrap();
+    let before = s.universe(true).await.unwrap();
+    let aapl_before = before
+        .iter()
+        .find(|e| e.symbol == Symbol::new("AAPL"))
+        .unwrap()
+        .clone();
+
+    let (added, skipped) = s
+        .import_manual(&[
+            manual("AAPL", "Other"),
+            manual("ZZZZ", "Energy"),
+            manual("YYYY", "Utilities"),
+            manual("ZZZZ", "Energy"),
+        ])
+        .await
+        .unwrap();
+    assert_eq!((added, skipped), (2, 2));
+
+    let all = s.universe(true).await.unwrap();
+    assert_eq!(all.len(), before.len() + 2);
+    // Наявний запис не змінено: джерело, назва, сектор і виключення ті самі.
+    let aapl = all
+        .iter()
+        .find(|e| e.symbol == Symbol::new("AAPL"))
+        .unwrap();
+    assert_eq!(aapl, &aapl_before);
+    assert_eq!(aapl.source, UniverseSource::Sp500);
+    assert!(aapl.excluded);
+    let zzzz = all
+        .iter()
+        .find(|e| e.symbol == Symbol::new("ZZZZ"))
+        .unwrap();
+    assert_eq!(zzzz, &manual("ZZZZ", "Energy"));
+}
+
+#[tokio::test]
+async fn import_manual_is_atomic() {
+    let s = Store::open_in_memory().await.unwrap();
+    // Друга вставка падає (тригер): перша має відкотитися.
+    sqlx::query(
+        "CREATE TRIGGER fail_yyyy BEFORE INSERT ON universe WHEN NEW.symbol = 'YYYY' \
+         BEGIN SELECT RAISE(ABORT, 'test: YYYY is rejected'); END",
+    )
+    .execute(s.pool())
+    .await
+    .unwrap();
+    let res = s
+        .import_manual(&[manual("ZZZZ", "Energy"), manual("YYYY", "Utilities")])
+        .await;
+    assert!(res.is_err());
+    assert!(s.universe(true).await.unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn remove_manual_ignores_non_manual_rows() {
     let s = Store::open_in_memory().await.unwrap();

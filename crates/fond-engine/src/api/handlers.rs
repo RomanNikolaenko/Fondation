@@ -2,9 +2,11 @@
 //!
 //! Дії оператора (схвалення, відхилення, ручне закриття, пауза, відновлення, зміна
 //! конфігурації) виконуються під `Engine::exclusive()`, тобто ніколи одночасно з кроком циклу.
-//! Аварійна зупинка спершу ставить `Killed` без замка, а скасовує ордери — вже під ним.
+//! Аварійна зупинка спершу ставить `Killed` без замка, а скасовує ордери окрема фонова задача —
+//! вже під ним.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::{Path, State};
@@ -13,8 +15,9 @@ use chrono::{DateTime, Duration, NaiveDate, NaiveTime, Utc};
 use fond_api::config::EngineConfig;
 use fond_api::dto::{
     AccountDto, AddSymbolRequest, BacktestDetailDto, BacktestRunDto, EngineModeDto, ExcludeRequest,
-    HealthDto, HistoryJobDto, HistoryRequest, KillRequest, NextStepDto, PositionDto, ScanResultDto,
-    SecretStatusDto, SetSecretRequest, SignalDto, StatusDto, UniverseEntryDto, VerifyResultDto,
+    HealthDto, HistoryJobDto, HistoryRequest, ImportResultDto, KillRequest, KillResultDto,
+    NextStepDto, PositionDto, ScanResultDto, SecretStatusDto, SetSecretRequest, SignalDto,
+    StatusDto, UniverseEntryDto, VerifyResultDto,
 };
 use fond_api::events::{EngineEventDto, JournalEventDto};
 use fond_backtest::{BacktestRequest, BacktestResult};
@@ -40,7 +43,7 @@ use crate::cycle::analysis::scan_reject_text;
 use crate::cycle::kill::{announce_kill, execute_kill, pause_by_user, resume as resume_engine};
 use crate::cycle::submit::close_position_now;
 use crate::cycle::{journal_dto, week_monday};
-use crate::deps::{SetupError, verify_secrets as verify_keys};
+use crate::deps::{Deps, SetupError, verify_secrets as verify_keys};
 use crate::jobs::{JOB_RUNNING, history_download_job, publish_history, run_backtest_job};
 use crate::runtime::{Engine, STALE_AFTER_MINUTES};
 use crate::schedule::{ScheduleInput, next_step_at};
@@ -431,38 +434,85 @@ pub async fn resume(State(st): State<ApiState>) -> ApiResult<StatusDto> {
     Ok(Json(e.status().await))
 }
 
+const KILL_SCHEDULED: &str = "scheduled";
+const KILL_UNAVAILABLE: &str = "unavailable";
+const NO_ALPACA_KEYS: &str = "Ключів Alpaca немає: ордери не скасовано";
+
 /// Аварійна зупинка: `Killed`, журнал і подія — одразу, без замка кроків (аналіз може ще
-/// створювати наміри, але відправка бачить `Killed` і нічого не надсилає). Скасування
-/// намірів і ордерів, закриття чи звірка — під замком. Без ключів брокера лишається тільки
-/// перша частина.
+/// створювати наміри, але відправка бачить `Killed` і нічого не надсилає). Далі брокерська
+/// частина (скасування намірів і ордерів, закриття чи звірка) запускається окремою задачею:
+/// вона чекає на замок кроків і доводиться до кінця, навіть якщо клієнт уже відключився.
+/// Для неї потрібні лише ключі Alpaca (фільтри вимкнено). Відповідь — одразу.
 pub async fn kill(
     State(st): State<ApiState>,
     ApiJson(req): ApiJson<KillRequest>,
-) -> ApiResult<StatusDto> {
+) -> ApiResult<KillResultDto> {
     let e = &st.engine;
-    announce_kill(e.store(), e.clock().as_ref(), e.bus(), req.close_positions).await?;
-    tracing::warn!(
-        close_positions = req.close_positions,
-        "аварійна зупинка користувачем"
-    );
-    match e.deps().await {
+    let close = req.close_positions;
+    announce_kill(e.store(), e.clock().as_ref(), e.bus(), close).await?;
+    tracing::warn!(close_positions = close, "аварійна зупинка користувачем");
+    let result = match e.broker_deps().await {
         Ok(d) => {
-            let _job = e.exclusive().await;
-            let report = execute_kill(&d, req.close_positions).await?;
-            tracing::info!(?report, "аварійну зупинку виконано");
+            tokio::spawn(broker_kill(e.clone(), d, close));
+            let what = if close {
+                "ордери буде скасовано, позиції — закрито"
+            } else {
+                "ордери буде скасовано, позиції лишаються під стопами"
+            };
+            KillResultDto {
+                broker_side: KILL_SCHEDULED.into(),
+                message: format!("Нові ордери заборонено; {what} після завершення поточного кроку"),
+            }
         }
         Err(SetupError::MissingSecrets(keys)) => {
             let missing: Vec<String> = keys.iter().map(status_name).collect();
+            tracing::warn!(?missing, "аварійна зупинка без ключів Alpaca");
             e.note(
                 EventKind::Kill,
-                "Аварійна зупинка: ключів брокера немає, ордери й позиції не перевірено".into(),
+                NO_ALPACA_KEYS.into(),
                 json!({ "needs_setup": missing }),
             )
             .await;
+            KillResultDto {
+                broker_side: KILL_UNAVAILABLE.into(),
+                message: NO_ALPACA_KEYS.into(),
+            }
         }
-        Err(other) => return Err(other.into()),
+        Err(SetupError::Other(m)) => {
+            let message = format!("Брокерську частину аварійної зупинки не виконано: {m}");
+            tracing::error!(error = %m, "аварійна зупинка: залежності не зібрано");
+            e.note(EventKind::Error, message.clone(), json!({ "error": m }))
+                .await;
+            KillResultDto {
+                broker_side: KILL_UNAVAILABLE.into(),
+                message,
+            }
+        }
+    };
+    Ok(Json(result))
+}
+
+/// Брокерська частина аварійної зупинки (окрема задача): замок кроків → `execute_kill`.
+/// Підсумок (лічильники) журналює сам `execute_kill`; помилка — запис `Error` у журналі.
+/// Наприкінці — `StatusChanged`.
+async fn broker_kill(engine: Arc<Engine>, d: Deps, close_positions: bool) {
+    {
+        let _job = engine.exclusive().await;
+        match execute_kill(&d, close_positions).await {
+            Ok(report) => tracing::info!(?report, "аварійну зупинку виконано"),
+            Err(err) => {
+                tracing::error!(error = %err, "аварійна зупинка: брокерську частину не завершено");
+                engine
+                    .note(
+                        EventKind::Error,
+                        format!("Аварійна зупинка: брокерську частину не завершено: {err}"),
+                        json!({ "close_positions": close_positions, "error": err.to_string() }),
+                    )
+                    .await;
+            }
+        }
     }
-    Ok(Json(e.status().await))
+    engine.bus().publish(EngineEventDto::StatusChanged);
 }
 
 // ---------------------------------------------------------------- конфігурація
@@ -870,9 +920,9 @@ pub async fn remove_symbol(
 pub async fn import_universe(
     State(st): State<ApiState>,
     body: String,
-) -> ApiResult<Vec<UniverseEntryDto>> {
+) -> ApiResult<ImportResultDto> {
     let e = &st.engine;
-    let entries = parse_universe_csv(&body, UniverseSource::Manual)
+    let mut entries = parse_universe_csv(&body, UniverseSource::Manual)
         .map_err(|m| ApiError::validation("Некоректний CSV", vec![m]))?;
     let bad: Vec<String> = entries
         .iter()
@@ -888,17 +938,25 @@ pub async fn import_universe(
             vec!["у файлі немає жодного тікера".into()],
         ));
     }
-    for entry in &entries {
-        e.store().add_manual(entry).await?;
+    for entry in &mut entries {
+        if entry.sector.is_empty() {
+            entry.sector = UNKNOWN_SECTOR.into();
+        }
+        if entry.name.is_empty() {
+            entry.name = entry.symbol.to_string();
+        }
     }
+    let (added, skipped) = e.store().import_manual(&entries).await?;
     universe_note(
         e,
         None,
-        format!("Імпортовано тікерів зі CSV: {}", entries.len()),
+        format!("Імпорт тікерів зі CSV: додано {added}, пропущено вже наявних {skipped}"),
     )
     .await;
-    let all = e.store().universe(true).await?;
-    Ok(Json(all.into_iter().map(entry_dto).collect()))
+    Ok(Json(ImportResultDto {
+        added: u32::try_from(added).unwrap_or(u32::MAX),
+        skipped: u32::try_from(skipped).unwrap_or(u32::MAX),
+    }))
 }
 
 // ---------------------------------------------------------------- секрети

@@ -277,6 +277,16 @@ impl Engine {
         Ok(built)
     }
 
+    /// Залежності лише для брокерської частини (аварійна зупинка): збираються з копії
+    /// конфігурації з вимкненими фільтрами новин і звітності, тож потрібні тільки ключі
+    /// Alpaca. Не кешуються й не змінюють кеш `deps()`.
+    pub async fn broker_deps(&self) -> Result<Deps, SetupError> {
+        let mut cfg = self.config().await;
+        cfg.news_filter.enabled = false;
+        cfg.earnings_filter.enabled = false;
+        self.factory.build(&cfg)
+    }
+
     pub async fn config(&self) -> EngineConfig {
         self.cfg.read().await.clone()
     }

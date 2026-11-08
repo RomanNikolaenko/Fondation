@@ -213,6 +213,28 @@ impl Store {
         Ok(())
     }
 
+    /// Імпорт тікерів як доданих вручну, однією транзакцією (помилка — нічого не вставлено).
+    /// Тікери, що вже є у списку (зокрема повтори в самому імпорті), пропускаються без змін:
+    /// джерело, назва, сектор і виключення зберігаються. Повертає `(додано, пропущено)`.
+    pub async fn import_manual(&self, entries: &[UniverseEntry]) -> Result<(usize, usize)> {
+        let mut tx = self.pool.begin().await?;
+        let mut added = 0;
+        for e in entries {
+            let res = sqlx::query(
+                "INSERT INTO universe (symbol, name, sector, source, excluded) \
+                 VALUES (?, ?, ?, 'manual', 0) ON CONFLICT(symbol) DO NOTHING",
+            )
+            .bind(e.symbol.as_str())
+            .bind(&e.name)
+            .bind(&e.sector)
+            .execute(&mut *tx)
+            .await?;
+            added += usize::try_from(res.rows_affected()).unwrap_or(0);
+        }
+        tx.commit().await?;
+        Ok((added, entries.len() - added))
+    }
+
     /// Видаляє лише записи, додані вручну.
     pub async fn remove_manual(&self, s: &Symbol) -> Result<()> {
         sqlx::query("DELETE FROM universe WHERE symbol = ? AND source = 'manual'")

@@ -148,6 +148,22 @@ pub struct KillRequest {
     pub close_positions: bool,
 }
 
+/// Відповідь `POST /engine/kill`. Режим `Killed` уже діє; `broker_side` — `"scheduled"`
+/// (скасування ордерів і закриття позицій виконуються у фоні, підсумок — у журналі) або
+/// `"unavailable"` (ключів Alpaca немає, брокерську частину не виконано).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct KillResultDto {
+    pub broker_side: String,
+    pub message: String,
+}
+
+/// Підсумок `POST /universe/import`: тікери, які вже були в списку, пропускаються без змін.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct ImportResultDto {
+    pub added: u32,
+    pub skipped: u32,
+}
+
 /// Тіло `PUT /secrets/{key}`. `Debug` не показує значення.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct SetSecretRequest {

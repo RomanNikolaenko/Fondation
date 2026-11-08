@@ -18,6 +18,7 @@ use fond_core::error::DataError;
 use fond_core::ids::IntentTag;
 use fond_core::intent::IntentStatus;
 use fond_core::keys::SecretKey;
+use fond_core::orders::Side;
 use fond_core::portfolio::Account;
 use fond_core::risk::RiskConfig;
 use fond_core::scanner::ScannerConfig;
@@ -37,18 +38,21 @@ use super::auth::{bind_addr, ensure_api_token};
 use super::{ApiState, router};
 use crate::config_io::{load_or_create, save_atomic};
 use crate::cycle::test_support::{
-    Handles, N_BARS, d, entry_kind, fixture, flat_bars, intent_with, tracked,
+    Handles, N_BARS, d, entry_kind, et, fixture, flat_bars, held_aapl, intent_with, session,
+    tracked,
 };
 use crate::deps::{Deps, DepsFactory, IndustryLookup, SetupError};
 use crate::runtime::Engine;
 
 const TOKEN: &str = "test-token-0123456789abcdef";
 
-/// Фабрика: залежності стенда або «бракує ключів Alpaca»; рахує збірки.
+/// Фабрика: залежності стенда, «бракує ключів Alpaca» або (як `LiveDepsFactory`) «бракує
+/// ключів увімкнених фільтрів»; рахує збірки.
 struct Factory {
     deps: Deps,
     builds: AtomicUsize,
     missing: AtomicBool,
+    missing_filter_keys: AtomicBool,
 }
 
 impl Factory {
@@ -59,16 +63,32 @@ impl Factory {
     fn set_missing(&self, missing: bool) {
         self.missing.store(missing, Ordering::SeqCst);
     }
+
+    fn set_missing_filter_keys(&self, missing: bool) {
+        self.missing_filter_keys.store(missing, Ordering::SeqCst);
+    }
 }
 
 impl DepsFactory for Factory {
-    fn build(&self, _cfg: &EngineConfig) -> Result<Deps, SetupError> {
+    fn build(&self, cfg: &EngineConfig) -> Result<Deps, SetupError> {
         self.builds.fetch_add(1, Ordering::SeqCst);
         if self.missing.load(Ordering::SeqCst) {
             return Err(SetupError::MissingSecrets(vec![
                 SecretKey::AlpacaKeyId,
                 SecretKey::AlpacaSecret,
             ]));
+        }
+        if self.missing_filter_keys.load(Ordering::SeqCst) {
+            let mut keys = Vec::new();
+            if cfg.news_filter.enabled {
+                keys.push(SecretKey::AnthropicApiKey);
+            }
+            if cfg.earnings_filter.enabled {
+                keys.push(SecretKey::FinnhubApiKey);
+            }
+            if !keys.is_empty() {
+                return Err(SetupError::MissingSecrets(keys));
+            }
         }
         Ok(self.deps.clone())
     }
@@ -106,6 +126,7 @@ async fn api_with(tweak: impl FnOnce(&mut Deps)) -> Api {
         deps: d.clone(),
         builds: AtomicUsize::new(0),
         missing: AtomicBool::new(false),
+        missing_filter_keys: AtomicBool::new(false),
     });
     let secrets = Arc::new(MemorySecretStore::default());
     let engine = Engine::new(
@@ -195,6 +216,45 @@ fn pending_entry(symbol: &str) -> fond_core::intent::Intent {
 
 fn error_text(body: &Value) -> &str {
     body["error"].as_str().unwrap_or_default()
+}
+
+/// Чекає (до 5 с), доки умова не справдиться.
+async fn wait_until<F, Fut>(what: &str, mut cond: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let deadline = tokio::time::Instant::now() + StdDuration::from_secs(5);
+    while !cond().await {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "не дочекались: {what}"
+        );
+        tokio::time::sleep(StdDuration::from_millis(10)).await;
+    }
+}
+
+async fn intent_status(a: &Api, id: &str) -> IntentStatus {
+    a.d.store.intent(id).await.unwrap().unwrap().status
+}
+
+fn kill_request(close_positions: bool) -> Request<Body> {
+    request(
+        Method::POST,
+        "/engine/kill",
+        Some(json!({ "close_positions": close_positions })),
+        Some(&bearer()),
+    )
+}
+
+async fn journal_messages(a: &Api) -> Vec<String> {
+    a.d.store
+        .events(&EventQuery::default())
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| e.message)
+        .collect()
 }
 
 #[tokio::test]
@@ -416,27 +476,46 @@ async fn kill_endpoint_sets_killed() {
     a.d.store.insert_intent(&i).await.unwrap();
     let mut rx = a.d.bus.subscribe();
 
-    let (st, body) = a
-        .call(
-            Method::POST,
-            "/engine/kill",
-            Some(json!({ "close_positions": false })),
-        )
-        .await;
+    let (st, body) = a.raw(kill_request(false)).await;
     assert_eq!(st, StatusCode::OK, "{body}");
-    assert_eq!(body["engine_mode"]["state"], "killed");
+    assert_eq!(body["broker_side"], "scheduled");
+    assert!(!body["message"].as_str().unwrap().is_empty());
     assert!(matches!(a.mode().await, EngineMode::Killed { .. }));
-    assert_eq!(
-        a.d.store.intent(&i.id).await.unwrap().unwrap().status,
-        IntentStatus::Cancelled
-    );
+    // Брокерська частина — у фоні: намір скасовується трохи згодом, підсумок — у журналі.
+    wait_until("намір скасовано", || async {
+        intent_status(&a, &i.id).await == IntentStatus::Cancelled
+    })
+    .await;
+    wait_until(
+        "підсумок аварійної зупинки в журналі",
+        || async {
+            journal_messages(&a)
+                .await
+                .iter()
+                .any(|m| m.starts_with("Аварійна зупинка: скасовано ордерів"))
+        },
+    )
+    .await;
     let mut killed = 0;
+    let mut status_changed = 0;
+    let deadline = tokio::time::Instant::now() + StdDuration::from_secs(5);
+    while status_changed == 0 && tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout(StdDuration::from_millis(100), rx.recv()).await {
+            Ok(Ok(EngineEventDto::Killed { .. })) => killed += 1,
+            Ok(Ok(EngineEventDto::StatusChanged)) => status_changed += 1,
+            _ => {}
+        }
+    }
     while let Ok(e) = rx.try_recv() {
         if matches!(e, EngineEventDto::Killed { .. }) {
             killed += 1;
         }
     }
     assert_eq!(killed, 1, "подія Killed має бути одна");
+    assert_eq!(
+        status_changed, 1,
+        "після брокерської частини — StatusChanged"
+    );
 
     let (st, body) = a.call(Method::POST, "/engine/resume", None).await;
     assert_eq!(st, StatusCode::OK);
@@ -444,44 +523,91 @@ async fn kill_endpoint_sets_killed() {
 }
 
 #[tokio::test]
-async fn kill_sets_killed_while_job_lock_is_held() {
+async fn kill_returns_promptly_while_job_lock_is_held() {
     let a = api().await;
+    let i = pending_entry("AAPL");
+    a.d.store.insert_intent(&i).await.unwrap();
     let guard = a.engine.exclusive().await;
-    let app = a.app.clone();
-    let req = request(
-        Method::POST,
-        "/engine/kill",
-        Some(json!({ "close_positions": false })),
-        Some(&bearer()),
-    );
-    let pending = tokio::spawn(async move { app.oneshot(req).await.unwrap().status() });
 
-    let deadline = tokio::time::Instant::now() + StdDuration::from_secs(5);
-    while !matches!(a.mode().await, EngineMode::Killed { .. }) {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "режим не став Killed, поки замок зайнято"
-        );
-        tokio::time::sleep(StdDuration::from_millis(10)).await;
-    }
-    assert!(!pending.is_finished(), "скасування ордерів чекає на замок");
+    // Відповідь не чекає на замок кроків (довгий аналіз).
+    let (st, body) = tokio::time::timeout(StdDuration::from_secs(5), a.raw(kill_request(false)))
+        .await
+        .expect("відповідь на kill не чекає на замок");
+    assert_eq!(st, StatusCode::OK, "{body}");
+    assert_eq!(body["broker_side"], "scheduled");
+    assert!(matches!(a.mode().await, EngineMode::Killed { .. }));
+    // Поки замок зайнято, скасування ще не відбулося.
+    tokio::time::sleep(StdDuration::from_millis(50)).await;
+    assert_eq!(
+        intent_status(&a, &i.id).await,
+        IntentStatus::PendingApproval
+    );
+
+    // Запит уже завершено (клієнт міг і відключитись) — робота однаково доводиться до кінця.
     drop(guard);
-    assert_eq!(pending.await.unwrap(), StatusCode::OK);
+    wait_until(
+        "брокерська частина після звільнення замка",
+        || async { intent_status(&a, &i.id).await == IntentStatus::Cancelled },
+    )
+    .await;
 }
 
 #[tokio::test]
-async fn kill_without_secrets_still_sets_killed() {
+async fn kill_with_alpaca_keys_but_missing_filter_keys_closes_positions() {
+    let a = api().await;
+    a.h.clock.set(et(session(), 10, 30));
+    let (_, held) = held_aapl(&a.d, &a.h).await;
+    let stop_id = held.stop_order_id.clone().unwrap();
+    // Ключів Anthropic і Finnhub немає, а фільтри ввімкнені: повні залежності не збираються.
+    a.factory.set_missing_filter_keys(true);
+    a.engine.invalidate_deps();
+    let (_, status) = a.get("/status").await;
+    assert_eq!(
+        status["needs_setup"],
+        json!(["anthropic_api_key", "finnhub_api_key"])
+    );
+
+    let (st, body) = a.raw(kill_request(true)).await;
+    assert_eq!(st, StatusCode::OK, "{body}");
+    assert_eq!(body["broker_side"], "scheduled");
+    wait_until(
+        "позицію продано аварійним закриттям",
+        || async {
+            a.h.broker.submitted().iter().any(|r| {
+                r.side == Side::Sell
+                    && r.symbol == Symbol::new("AAPL")
+                    && r.qty == 10
+                    && r.client_order_id.starts_with("fond-kill-")
+            })
+        },
+    )
+    .await;
+    assert!(a.h.broker.cancels().contains(&stop_id), "стоп скасовано");
+    assert!(
+        journal_messages(&a)
+            .await
+            .iter()
+            .all(|m| !m.contains("Ключів Alpaca немає")),
+        "ключі Alpaca є"
+    );
+}
+
+#[tokio::test]
+async fn kill_without_alpaca_keys_is_unavailable() {
     let a = api().await;
     a.factory.set_missing(true);
-    let (st, _) = a
-        .call(
-            Method::POST,
-            "/engine/kill",
-            Some(json!({ "close_positions": true })),
-        )
-        .await;
-    assert_eq!(st, StatusCode::OK);
+    let (st, body) = a.raw(kill_request(true)).await;
+    assert_eq!(st, StatusCode::OK, "{body}");
+    assert_eq!(body["broker_side"], "unavailable");
+    assert_eq!(body["message"], "Ключів Alpaca немає: ордери не скасовано");
     assert!(matches!(a.mode().await, EngineMode::Killed { .. }));
+    let messages = journal_messages(&a).await;
+    assert!(
+        messages
+            .iter()
+            .any(|m| m == "Ключів Alpaca немає: ордери не скасовано"),
+        "{messages:?}"
+    );
 }
 
 #[tokio::test]
@@ -817,35 +943,55 @@ async fn universe_exclude_delete_and_import() {
     let (st, _) = a.call(Method::DELETE, "/universe/MSFT", None).await;
     assert_eq!(st, StatusCode::NOT_FOUND);
 
-    let csv = "symbol,name,sector\nAMZN,\"Amazon.com, Inc.\",Consumer Discretionary\n";
-    let req = Request::builder()
-        .method(Method::POST)
-        .uri("/universe/import")
-        .header(header::AUTHORIZATION, bearer())
-        .header(header::CONTENT_TYPE, "text/csv")
-        .body(Body::from(csv))
-        .unwrap();
-    let (st, list) = a.raw(req).await;
-    assert_eq!(st, StatusCode::OK, "{list}");
-    let amzn = list
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|e| e["symbol"] == "AMZN")
-        .unwrap();
-    assert_eq!(amzn["name"], "Amazon.com, Inc.");
-    assert_eq!(amzn["source"], "manual");
+    // KO уже є (вбудований S&P 500, виключений) — пропускається без змін; порожній сектор —
+    // «Unknown».
+    let (st, res) = a
+        .raw(csv_request(
+            "symbol,name,sector\nAMZN,\"Amazon.com, Inc.\",Consumer Discretionary\n\
+             KO,Coca-Cola Co,Beverages\nNFLX,Netflix,\n",
+        ))
+        .await;
+    assert_eq!(st, StatusCode::OK, "{res}");
+    assert_eq!(res, json!({ "added": 2, "skipped": 1 }));
+    let (_, all) = a.get("/universe").await;
+    let entry = |s: &str| {
+        all.as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["symbol"] == s)
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
+    assert_eq!(entry("AMZN")["name"], "Amazon.com, Inc.");
+    assert_eq!(entry("AMZN")["source"], "manual");
+    assert_eq!(entry("NFLX")["sector"], "Unknown");
+    assert_eq!(
+        entry("KO"),
+        json!({
+            "symbol": "KO",
+            "name": "Coca-Cola",
+            "sector": "Consumer Staples",
+            "source": "sp500",
+            "excluded": true,
+        })
+    );
 
-    let bad = Request::builder()
-        .method(Method::POST)
-        .uri("/universe/import")
-        .header(header::AUTHORIZATION, bearer())
-        .header(header::CONTENT_TYPE, "text/csv")
-        .body(Body::from("ticker\nAMZN\n"))
-        .unwrap();
-    let (st, body) = a.raw(bad).await;
+    // Некоректний рядок — 422, і нічого не вставлено (навіть коректні рядки перед ним).
+    let (st, body) = a
+        .raw(csv_request(
+            "symbol,name,sector\nORCL,Oracle,Technology\nBROKEN,only-two\n",
+        ))
+        .await;
     assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(!body["details"].as_array().unwrap().is_empty());
+    let (st, _) = a
+        .raw(csv_request(
+            "symbol,name,sector\nIBM,IBM,Technology\nBAD SYM,x,y\n",
+        ))
+        .await;
+    assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY);
+    let (st, _) = a.raw(csv_request("ticker\nAMZN\n")).await;
+    assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY);
 
     let (_, all) = a.get("/universe").await;
     let symbols: Vec<&str> = all
@@ -854,7 +1000,17 @@ async fn universe_exclude_delete_and_import() {
         .iter()
         .filter_map(|e| e["symbol"].as_str())
         .collect();
-    assert_eq!(symbols, ["AAPL", "AMZN", "KO", "SPY"]);
+    assert_eq!(symbols, ["AAPL", "AMZN", "KO", "NFLX", "SPY"]);
+}
+
+fn csv_request(csv: &str) -> Request<Body> {
+    Request::builder()
+        .method(Method::POST)
+        .uri("/universe/import")
+        .header(header::AUTHORIZATION, bearer())
+        .header(header::CONTENT_TYPE, "text/csv")
+        .body(Body::from(csv.to_string()))
+        .unwrap()
 }
 
 #[tokio::test]

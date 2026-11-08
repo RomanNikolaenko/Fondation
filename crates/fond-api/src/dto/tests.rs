@@ -27,6 +27,8 @@ fn export_to(cfg: &Config) -> Result<(), ExportError> {
     SecretStatusDto::export_all(cfg)?;
     VerifyResultDto::export_all(cfg)?;
     KillRequest::export_all(cfg)?;
+    KillResultDto::export_all(cfg)?;
+    ImportResultDto::export_all(cfg)?;
     SetSecretRequest::export_all(cfg)?;
     AddSymbolRequest::export_all(cfg)?;
     ExcludeRequest::export_all(cfg)?;
@@ -132,6 +134,28 @@ fn status_and_error_shapes() {
         serde_json::to_value(&e).unwrap(),
         json!({ "error": "Некоректна конфігурація", "details": ["a"] })
     );
+}
+
+#[test]
+fn kill_and_import_results_shape() {
+    let k = KillResultDto {
+        broker_side: "scheduled".into(),
+        message: "m".into(),
+    };
+    assert_eq!(
+        serde_json::to_value(&k).unwrap(),
+        json!({ "broker_side": "scheduled", "message": "m" })
+    );
+    let i = ImportResultDto {
+        added: 2,
+        skipped: 1,
+    };
+    assert_eq!(
+        serde_json::to_value(&i).unwrap(),
+        json!({ "added": 2, "skipped": 1 })
+    );
+    let ts = ImportResultDto::decl(&Config::new());
+    assert!(ts.contains("added: number"), "{ts}");
 }
 
 #[test]
