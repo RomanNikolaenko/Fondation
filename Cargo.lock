@@ -1549,10 +1549,27 @@ dependencies = [
 name = "fond-desktop"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "chrono-tz",
+ "dirs",
+ "fond-api",
+ "fond-backtest",
+ "fond-core",
+ "futures",
+ "keyring",
+ "reqwest",
+ "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-notification",
  "tauri-plugin-single-instance",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite 0.30.0",
+ "url",
+ "winreg",
+ "wiremock",
 ]
 
 [[package]]

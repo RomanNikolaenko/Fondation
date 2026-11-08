@@ -13,9 +13,30 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { workspace = true }
 
 [dependencies]
-tauri = { workspace = true }
+tauri = { workspace = true, features = ["tray-icon"] }
 tauri-plugin-notification = { workspace = true }
 tauri-plugin-single-instance = { workspace = true }
+fond-api = { path = "../../../crates/fond-api" }
+fond-core = { path = "../../../crates/fond-core" }
+fond-backtest = { path = "../../../crates/fond-backtest" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures = { workspace = true }
+chrono = { workspace = true }
+chrono-tz = { workspace = true }
+dirs = { workspace = true }
+keyring = { workspace = true, features = ["v1"] }
+url = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+winreg = { workspace = true }
+
+[dev-dependencies]
+wiremock = { workspace = true }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true
