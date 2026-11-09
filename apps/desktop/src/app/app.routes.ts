@@ -1,10 +1,6 @@
 import { Routes } from '@angular/router';
 
 import { disclaimerGuard } from './core/disclaimer.guard';
-import { UK } from './i18n/uk';
-
-const placeholder = () =>
-  import('./features/placeholder').then((m) => m.Placeholder);
 
 const overview = () =>
   import('./features/overview/overview').then((m) => m.Overview);
@@ -43,13 +39,13 @@ export const routes: Routes = [
       },
       {
         path: 'strategies',
-        loadComponent: placeholder,
-        data: { title: UK.nav.strategies },
+        loadComponent: () =>
+          import('./features/strategies/strategies').then((m) => m.Strategies),
       },
       {
         path: 'settings',
-        loadComponent: placeholder,
-        data: { title: UK.nav.settings },
+        loadComponent: () =>
+          import('./features/settings/settings').then((m) => m.Settings),
       },
     ],
   },
