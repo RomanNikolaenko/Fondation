@@ -30,14 +30,12 @@ export const routes: Routes = [
       },
       {
         path: 'signals',
-        loadComponent: placeholder,
-        data: { title: UK.nav.signals },
+        loadComponent: () => import('./features/signals/signals').then((m) => m.Signals),
       },
       { path: 'chart', loadComponent: () => import('./features/chart/chart').then((m) => m.Chart) },
       {
         path: 'journal',
-        loadComponent: placeholder,
-        data: { title: UK.nav.journal },
+        loadComponent: () => import('./features/journal/journal').then((m) => m.Journal),
       },
       {
         path: 'backtest',

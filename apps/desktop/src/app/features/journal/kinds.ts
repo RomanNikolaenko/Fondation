@@ -1,0 +1,15 @@
+export const JOURNAL_KINDS = [
+  'cycle',
+  'scan',
+  'signal',
+  'filter',
+  'risk',
+  'intent',
+  'order',
+  'fill',
+  'reconcile',
+  'pause',
+  'kill',
+  'config',
+  'error',
+] as const;

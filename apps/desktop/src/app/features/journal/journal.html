@@ -1,0 +1,89 @@
+<section class="journal">
+  <header class="head">
+    <h1>Журнал</h1>
+    <button type="button" class="secondary" [disabled]="loading()" (click)="export()">
+      Експорт CSV
+    </button>
+  </header>
+
+  <form class="filters" (submit)="onSubmit($event)">
+    <label>
+      <span>Від</span>
+      <input type="date" name="from" [value]="from()" (input)="setFrom($event)" />
+    </label>
+    <label>
+      <span>До</span>
+      <input type="date" name="to" [value]="to()" (input)="setTo($event)" />
+    </label>
+    <label>
+      <span>Символ</span>
+      <input
+        type="text"
+        name="symbol"
+        autocomplete="off"
+        [value]="symbol()"
+        (input)="setSymbol($event)"
+      />
+    </label>
+    <label>
+      <span>Типи</span>
+      <input
+        type="text"
+        name="kinds"
+        autocomplete="off"
+        placeholder="через кому"
+        [value]="kindsText()"
+        (input)="setKinds($event)"
+      />
+    </label>
+    <button type="submit" [disabled]="loading()">
+      {{ loading() ? 'Завантаження…' : 'Застосувати' }}
+    </button>
+  </form>
+
+  @if (error()) {
+    <p class="error" role="alert">{{ error() }}</p>
+  }
+
+  @if (!loading() && eventsList().length === 0) {
+    <p class="muted">Подій із такими фільтрами немає.</p>
+  } @else {
+    <table>
+      <thead>
+        <tr>
+          <th></th>
+          <th>Час (Київ)</th>
+          <th>Тип</th>
+          <th>Символ</th>
+          <th>Повідомлення</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (row of eventsList(); track row.id) {
+          <tr [class.open]="selected().has(row.id)">
+            <td>
+              <button
+                type="button"
+                class="toggle"
+                (click)="toggle(row.id)"
+                [attr.aria-label]="'Деталі події ' + row.id"
+              >
+                {{ selected().has(row.id) ? '▾' : '▸' }}
+              </button>
+            </td>
+            <td>{{ row.at | kyivDate }}</td>
+            <td class="kind">{{ row.kind }}</td>
+            <td>{{ row.symbol ?? '—' }}</td>
+            <td class="message">{{ row.message }}</td>
+          </tr>
+          @if (selected().has(row.id)) {
+            <tr class="expanded">
+              <td></td>
+              <td colspan="4"><pre>{{ data(row) }}</pre></td>
+            </tr>
+          }
+        }
+      </tbody>
+    </table>
+  }
+</section>
