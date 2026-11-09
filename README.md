@@ -12,17 +12,17 @@ Alpaca (paper або real). Архітектура «два процеси»: ф
 
 ## Склад репозиторію
 
-| Частина | Що це |
-| --- | --- |
-| `crates/fond-core` | доменні типи: бари, сигнали, наміри, конфігурація, розклад (ET/Київ) |
-| `crates/fond-strategies` | стратегії: `trend_pullback`, `breakout` і ринковий фільтр |
-| `crates/fond-backtest` | бек-тест на історичних барах: витрати, частки, розділення in/out-of-sample |
-| `crates/fond-adapters` | брокер і дані: Alpaca та Finnhub, сканер юніверсу |
-| `crates/fond-store` | SQLite-сховище барав, подій, позицій і журналів |
-| `crates/fond-api` | REST/WS API над рушем (axum), DTO й генерація TypeScript типів |
-| `crates/fond-engine` | цикл рушія, розклад, ризик-ліміти, замки та події |
-| `apps/desktop` | застосунок Tauri (Angular) і sidecar-запуск `fond-engine` |
-| `docs/superpowers/plans` | реалізаційні плани; `docs/acceptance/part1.md` — чекліст приймання |
+| Частина                  | Що це                                                                      |
+| ------------------------ | -------------------------------------------------------------------------- |
+| `crates/fond-core`       | доменні типи: бари, сигнали, наміри, конфігурація, розклад (ET/Київ)       |
+| `crates/fond-strategies` | стратегії: `trend_pullback`, `breakout` і ринковий фільтр                  |
+| `crates/fond-backtest`   | бек-тест на історичних барах: витрати, частки, розділення in/out-of-sample |
+| `crates/fond-adapters`   | брокер і дані: Alpaca та Finnhub, сканер юніверсу                          |
+| `crates/fond-store`      | SQLite-сховище барав, подій, позицій і журналів                            |
+| `crates/fond-api`        | REST/WS API над рушем (axum), DTO й генерація TypeScript типів             |
+| `crates/fond-engine`     | цикл рушія, розклад, ризик-ліміти, замки та події                          |
+| `apps/desktop`           | застосунок Tauri (Angular) і sidecar-запуск `fond-engine`                  |
+| `docs/superpowers/plans` | реалізаційні плани; `docs/acceptance/part1.md` — чекліст приймання         |
 
 ## Швидкий стартВимоги: Node 24+, pnpm 12, Rust (stable, Windows: MSVC). Windows — основна ціль.
 
@@ -34,14 +34,14 @@ pnpm --filter desktop tauri dev     # застосунок + рушій пору
 
 ## Команди
 
-| Команда | Що робить |
-| --- | --- |
-| `pnpm check` | повна перевірка: форматування, білд, lint (oxlint/stylelint/clippy), усі тести, узгодженість генерації DTO |
-| `pnpm test` | тести Rust workspace + Angular (`apps/desktop`) |
-| `pnpm lint` | oxlint, stylelint і `cargo clippy -D warnings` |
-| `pnpm fmt` | oxfmt + `cargo fmt` |
-| `pnpm gen:types` | оновлення TypeScript DTO з Rust (`crates/fond-api` → `apps/desktop/src/app/core/generated`) |
-| `pnpm package` | release-білд рушія + інсталятор NSIS у `target/release/bundle/nsis/` |
+| Команда          | Що робить                                                                                                  |
+| ---------------- | ---------------------------------------------------------------------------------------------------------- |
+| `pnpm check`     | повна перевірка: форматування, білд, lint (oxlint/stylelint/clippy), усі тести, узгодженість генерації DTO |
+| `pnpm test`      | тести Rust workspace + Angular (`apps/desktop`)                                                            |
+| `pnpm lint`      | oxlint, stylelint і `cargo clippy -D warnings`                                                             |
+| `pnpm fmt`       | oxfmt + `cargo fmt`                                                                                        |
+| `pnpm gen:types` | оновлення TypeScript DTO з Rust (`crates/fond-api` → `apps/desktop/src/app/core/generated`)                |
+| `pnpm package`   | release-білд рушія + інсталятор NSIS у `target/release/bundle/nsis/`                                       |
 
 ## Як це працює
 

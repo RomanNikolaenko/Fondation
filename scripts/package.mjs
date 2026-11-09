@@ -12,16 +12,22 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const shell = process.platform === 'win32';
-const pnpm = shell ? 'pnpm.cmd' : 'pnpm';
+const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
 
 function run(command, args) {
   console.log(`> ${command} ${args.join(' ')}`);
-  const result = spawnSync(command, args, {
-    cwd: root,
-    stdio: 'inherit',
-    shell,
-  });
+  // Windows: .cmd не запустити без обгортки, але `cmd /c` не потребує
+  // опції shell (інакше Node попереджає DEP0190 про неекрановані аргументи).
+  const result =
+    process.platform === 'win32'
+      ? spawnSync('cmd.exe', ['/c', command, ...args], {
+          cwd: root,
+          stdio: 'inherit',
+        })
+      : spawnSync(command, args, {
+          cwd: root,
+          stdio: 'inherit',
+        });
   if (result.error) {
     console.error(`Не вдалося запустити ${command}: ${result.error.message}`);
     process.exit(1);
