@@ -39,8 +39,7 @@ export const routes: Routes = [
       },
       {
         path: 'backtest',
-        loadComponent: placeholder,
-        data: { title: UK.nav.backtest },
+        loadComponent: () => import('./features/backtest/backtest').then((m) => m.Backtest),
       },
       {
         path: 'strategies',

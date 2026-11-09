@@ -80,6 +80,8 @@ function cssColor(name: string, fallback: string): string {
   return value === '' ? fallback : value;
 }
 
+export { cssColor };
+
 /** Свічковий графік із накладеннями та позначками угод. */
 @Component({
   selector: 'fond-candle-chart',
@@ -93,8 +95,7 @@ function cssColor(name: string, fallback: string): string {
       width: 100%;
     }
   `,
-})
-export class CandleChart implements OnDestroy {
+})export class CandleChart implements OnDestroy {
   readonly bars = input.required<Bar[]>();
   readonly markers = input<ChartMarker[]>([]);
   readonly overlays = input<ChartOverlay[]>([]);
