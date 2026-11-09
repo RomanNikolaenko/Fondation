@@ -13,8 +13,7 @@ export const LIMITATION_TEXT: Record<Limitation, string> = {
   news_filter_not_simulated:
     'Фільтр новин (Claude) у бектесті вимкнений: модель знає, що сталося ' +
     'після історичних дат.',
-  earnings_filter_not_applied:
-    'Фільтр звітів не застосовано: немає історичних дат звітів.',
+  earnings_filter_not_applied: 'Фільтр звітів не застосовано: немає історичних дат звітів.',
   weekly_loss_approximation:
     'Тижневий ліміт збитку в бектесті знімається з початком наступного тижня, ' +
     'а в живій торгівлі — лише вручну.',

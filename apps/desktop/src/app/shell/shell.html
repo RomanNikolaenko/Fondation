@@ -3,17 +3,17 @@
     <div class="brand">{{ appName }}</div>
     <nav aria-label="Головна навігація">
       @for (item of nav; track item.path) {
-        <a
-          class="nav-link"
-          [routerLink]="item.path"
-          routerLinkActive="nav-link--active"
-          [routerLinkActiveOptions]="{ exact: item.path === '' }"
-        >
-          <span>{{ item.label }}</span>
-          @if (item.path === 'approvals' && store.pendingCount() > 0) {
-            <span class="badge">{{ store.pendingCount() }}</span>
-          }
-        </a>
+      <a
+        class="nav-link"
+        [routerLink]="item.path"
+        routerLinkActive="nav-link--active"
+        [routerLinkActiveOptions]="{ exact: item.path === '' }"
+      >
+        <span>{{ item.label }}</span>
+        @if (item.path === 'approvals' && store.pendingCount() > 0) {
+        <span class="badge">{{ store.pendingCount() }}</span>
+        }
+      </a>
       }
     </nav>
   </aside>

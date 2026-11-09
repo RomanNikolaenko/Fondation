@@ -5,10 +5,11 @@
     "fmt": "oxfmt . && cargo fmt --all",
     "fmt:check": "oxfmt --check . && cargo fmt --all -- --check",
     "build:web": "pnpm --filter desktop build",
-    "lint": "oxlint && stylelint \"apps/desktop/src/**/*.scss\" --allow-empty-input && cargo clippy --workspace --all-targets -- -D warnings",
-    "test": "cargo test --workspace && pnpm --filter desktop test",
+    "lint": "node scripts/ensure-engine.mjs && oxlint && stylelint \"apps/desktop/src/**/*.scss\" --allow-empty-input && cargo clippy --workspace --all-targets -- -D warnings",
+    "test": "node scripts/ensure-engine.mjs && cargo test --workspace && pnpm --filter desktop test",
     "gen:types": "cargo test -p fond-api export_bindings",
     "gen:check": "git diff --exit-code -- apps/desktop/src/app/core/generated",
+    "package": "node scripts/package.mjs",
     "check": "pnpm fmt:check && pnpm build:web && pnpm lint && pnpm test && pnpm gen:check"
   },
   "devDependencies": {

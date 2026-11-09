@@ -25,15 +25,17 @@ pub fn tray_tooltip(status: &StatusDto) -> String {
         "running" => match &status.next_step {
             Some(step) => format!(
                 "Fond — працює · наступний крок {} ET",
-                step.at
-                    .with_timezone(&New_York)
-                    .format("%H:%M")
+                step.at.with_timezone(&New_York).format("%H:%M")
             ),
             None => "Fond — працює".into(),
         },
         "paused" => format!(
             "Fond — пауза: {}",
-            status.engine_mode.reason.as_deref().unwrap_or("причина невідома")
+            status
+                .engine_mode
+                .reason
+                .as_deref()
+                .unwrap_or("причина невідома")
         ),
         "killed" => "Fond — аварійна зупинка".into(),
         other => format!("Fond — невідомий стан ({other})"),

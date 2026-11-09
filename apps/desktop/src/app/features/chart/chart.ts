@@ -6,12 +6,7 @@ import { EngineService } from '../../core/engine.service';
 import type { Bar } from '../../core/generated/Bar';
 import type { JournalEventDto } from '../../core/generated/JournalEventDto';
 import { todayEt } from '../../core/tz';
-import {
-  CandleChart,
-  sma,
-  type ChartMarker,
-  type ChartOverlay,
-} from '../../shared/candle-chart';
+import { CandleChart, sma, type ChartMarker, type ChartOverlay } from '../../shared/candle-chart';
 
 const DEFAULT_SYMBOL = 'SPY';
 
@@ -134,9 +129,7 @@ export class Chart implements OnInit {
   private async loadMarkers(symbol: string): Promise<ChartMarker[]> {
     if (this.bt) {
       const detail = await this.api.getBacktest(this.bt);
-      const trades = (detail.result?.trades ?? []).filter(
-        (trade) => trade.symbol === symbol,
-      );
+      const trades = (detail.result?.trades ?? []).filter((trade) => trade.symbol === symbol);
       return trades.flatMap((trade) => [
         {
           date: trade.entry_date,
@@ -161,11 +154,7 @@ export class Chart implements OnInit {
     return events.map(markerFromEvent);
   }
 
-  private overlay(
-    name: string,
-    bars: Bar[],
-    values: (number | null)[],
-  ): ChartOverlay {
+  private overlay(name: string, bars: Bar[], values: (number | null)[]): ChartOverlay {
     const points: { date: string; value: number }[] = [];
     for (let i = 0; i < bars.length; i += 1) {
       const value = values[i];

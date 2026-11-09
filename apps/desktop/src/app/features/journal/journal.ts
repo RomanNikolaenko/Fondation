@@ -1,10 +1,4 @@
-import {
-  Component,
-  DestroyRef,
-  OnInit,
-  inject,
-  signal,
-} from '@angular/core';
+import { Component, DestroyRef, OnInit, inject, signal } from '@angular/core';
 
 import { errorMessage } from '../../core/api-error';
 import { EngineService } from '../../core/engine.service';
@@ -45,9 +39,7 @@ export class Journal implements OnInit {
 
   ngOnInit(): void {
     void this.reload();
-    this.destroyRef.onDestroy(
-      this.events.on('journal', () => void this.reload()),
-    );
+    this.destroyRef.onDestroy(this.events.on('journal', () => void this.reload()));
   }
 
   protected setFrom(event: Event): void {

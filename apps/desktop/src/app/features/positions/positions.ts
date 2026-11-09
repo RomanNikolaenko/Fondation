@@ -8,13 +8,7 @@ import type { BrokerOrder } from '../../core/generated/BrokerOrder';
 import type { PositionDto } from '../../core/generated/PositionDto';
 import { MoneyPipe } from '../../shared/money.pipe';
 
-const OPEN: string[] = [
-  'new',
-  'accepted',
-  'pending_new',
-  'held',
-  'partially_filled',
-];
+const OPEN: string[] = ['new', 'accepted', 'pending_new', 'held', 'partially_filled'];
 
 function isOpen(status: BrokerOrder['status']): boolean {
   return typeof status === 'string' && OPEN.includes(status);
@@ -47,12 +41,8 @@ export class Positions implements OnInit {
 
   ngOnInit(): void {
     void this.reload();
-    this.destroyRef.onDestroy(
-      this.events.on('order_filled', () => void this.reload()),
-    );
-    this.destroyRef.onDestroy(
-      this.events.on('stop_hit', () => void this.reload()),
-    );
+    this.destroyRef.onDestroy(this.events.on('order_filled', () => void this.reload()));
+    this.destroyRef.onDestroy(this.events.on('stop_hit', () => void this.reload()));
   }
 
   protected positionValue(position: PositionDto): number {

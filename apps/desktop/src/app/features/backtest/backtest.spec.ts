@@ -154,15 +154,10 @@ function doneDetail(): BacktestDetailDto {
         exit_reason: { type: 'signal', detail: 'Трейлінг-стоп' },
       },
     ],
-    equity: [
-      { date: '2025-05-20', equity: 100_580, benchmark: 100_000, in_market: false },
-    ],
+    equity: [{ date: '2025-05-20', equity: 100_580, benchmark: 100_000, in_market: false }],
     decisions: [],
     metrics: report(),
-    limitations: [
-      'survivorship_bias',
-      'news_filter_not_simulated',
-    ] as Limitation[],
+    limitations: ['survivorship_bias', 'news_filter_not_simulated'] as Limitation[],
   };
   return { run: runDto('done'), result };
 }
@@ -292,9 +287,7 @@ describe('Backtest screen', () => {
     expect(api.listBacktests).toHaveBeenCalled();
 
     (
-      (fixture.nativeElement as HTMLElement).querySelector(
-        'button.primary',
-      ) as HTMLButtonElement
+      (fixture.nativeElement as HTMLElement).querySelector('button.primary') as HTMLButtonElement
     ).click();
 
     await vi.advanceTimersByTimeAsync(0);
@@ -317,19 +310,14 @@ describe('Backtest screen', () => {
 
   it('clicking a trade opens the chart with run id in query params', async () => {
     const api = apiMock({
-      getBacktest: vi
-        .fn()
-        .mockResolvedValueOnce(runningDetail())
-        .mockResolvedValue(doneDetail()),
+      getBacktest: vi.fn().mockResolvedValueOnce(runningDetail()).mockResolvedValue(doneDetail()),
     });
     const { fixture, router } = configure(api);
     fixture.detectChanges();
     await vi.advanceTimersByTimeAsync(0);
 
     (
-      (fixture.nativeElement as HTMLElement).querySelector(
-        'button.primary',
-      ) as HTMLButtonElement
+      (fixture.nativeElement as HTMLElement).querySelector('button.primary') as HTMLButtonElement
     ).click();
 
     await vi.advanceTimersByTimeAsync(0);

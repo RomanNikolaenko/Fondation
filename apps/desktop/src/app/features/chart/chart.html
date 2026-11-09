@@ -27,23 +27,16 @@
   </header>
 
   @if (error()) {
-    <p class="error" role="alert">{{ error() }}</p>
-  }
-
-  @if (hasBacktest()) {
-    <p class="hint">Позначки — угоди бектесту.</p>
+  <p class="error" role="alert">{{ error() }}</p>
+  } @if (hasBacktest()) {
+  <p class="hint">Позначки — угоди бектесту.</p>
   } @else {
-    <p class="hint">Позначки — входи й виходи з журналу.</p>
+  <p class="hint">Позначки — входи й виходи з журналу.</p>
   }
 
-  <fond-candle-chart
-    [bars]="bars()"
-    [markers]="markers()"
-    [overlays]="overlays()"
-    [height]="480"
-  />
+  <fond-candle-chart [bars]="bars()" [markers]="markers()" [overlays]="overlays()" [height]="480" />
 
   @if (!loading() && bars().length === 0 && !error()) {
-    <p class="muted">Немає даних за вибраний період.</p>
+  <p class="muted">Немає даних за вибраний період.</p>
   }
 </section>

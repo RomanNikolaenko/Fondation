@@ -40,7 +40,8 @@ function fmt(value: number, digits = 2): string {
         @for (row of rows(); track row.label) {
           <tr>
             <th scope="row">
-              {{ row.label }}@if (row.benefit) {
+              {{ row.label }}
+              @if (row.benefit) {
                 <span class="tag">бенчмарк</span>
               }
             </th>

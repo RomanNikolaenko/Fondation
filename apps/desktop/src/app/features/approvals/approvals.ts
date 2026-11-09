@@ -33,9 +33,7 @@ export class Approvals implements OnInit {
   protected readonly error = signal<string | null>(null);
 
   constructor() {
-    this.destroyRef.onDestroy(
-      this.events.on('intents_pending', () => void this.reload()),
-    );
+    this.destroyRef.onDestroy(this.events.on('intents_pending', () => void this.reload()));
   }
 
   ngOnInit(): void {

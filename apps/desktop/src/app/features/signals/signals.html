@@ -8,41 +8,41 @@
   </header>
 
   @if (error()) {
-    <p class="error" role="alert">{{ error() }}</p>
+  <p class="error" role="alert">{{ error() }}</p>
   }
 
   <h2>Сигнали за {{ date() || '—' }}</h2>
   @if (loading()) {
-    <p class="muted">Завантаження…</p>
+  <p class="muted">Завантаження…</p>
   } @else if (signals().length === 0) {
-    <p class="muted">Сигналів за цю дату немає.</p>
+  <p class="muted">Сигналів за цю дату немає.</p>
   } @else {
-    <table>
-      <thead>
-        <tr>
-          <th>Стратегія</th>
-          <th>Символ</th>
-          <th>Сила</th>
-          <th>Статус</th>
-          <th>Причина відхилення</th>
-          <th>Пояснення</th>
-        </tr>
-      </thead>
-      <tbody>
-        @for (row of signals(); track row.signal.symbol + row.signal.strategy) {
-          <tr>
-            <td>{{ row.signal.strategy }}</td>
-            <td>{{ row.signal.symbol }}</td>
-            <td>{{ row.signal.strength }}</td>
-            <td [class.reject]="row.status === 'rejected'">
-              {{ row.status === 'accepted' ? 'прийнято' : 'відхилено' }}
-            </td>
-            <td>{{ row.reject_reason ?? '—' }}</td>
-            <td class="explanation">{{ row.signal.explanation }}</td>
-          </tr>
-        }
-      </tbody>
-    </table>
+  <table>
+    <thead>
+      <tr>
+        <th>Стратегія</th>
+        <th>Символ</th>
+        <th>Сила</th>
+        <th>Статус</th>
+        <th>Причина відхилення</th>
+        <th>Пояснення</th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (row of signals(); track row.signal.symbol + row.signal.strategy) {
+      <tr>
+        <td>{{ row.signal.strategy }}</td>
+        <td>{{ row.signal.symbol }}</td>
+        <td>{{ row.signal.strength }}</td>
+        <td [class.reject]="row.status === 'rejected'">
+          {{ row.status === 'accepted' ? 'прийнято' : 'відхилено' }}
+        </td>
+        <td>{{ row.reject_reason ?? '—' }}</td>
+        <td class="explanation">{{ row.signal.explanation }}</td>
+      </tr>
+      }
+    </tbody>
+  </table>
   }
 
   <h2>Сканер</h2>
@@ -58,35 +58,31 @@
   </form>
 
   @if (scan().length > 0) {
-    <p class="summary">
-      Пройшли: {{ scan().filter((row) => row.passed).length }} · Відсіяні:
-      {{ scan().filter((row) => !row.passed).length }}
-      @for (item of scanSummary(); track item.reason) {
-        · {{ item.reason }}: {{ item.count }}
-      }
-    </p>
-  }
-
-  @if (!loading() && filteredScan().length === 0) {
-    <p class="muted">Нічого не відповідає фільтру.</p>
+  <p class="summary">
+    Пройшли: {{ scan().filter((row) => row.passed).length }} · Відсіяні: {{ scan().filter((row) =>
+    !row.passed).length }} @for (item of scanSummary(); track item.reason) { · {{ item.reason }}: {{
+    item.count }} }
+  </p>
+  } @if (!loading() && filteredScan().length === 0) {
+  <p class="muted">Нічого не відповідає фільтру.</p>
   } @else {
-    <table>
-      <thead>
-        <tr>
-          <th>Символ</th>
-          <th>Стан</th>
-          <th>Причина</th>
-        </tr>
-      </thead>
-      <tbody>
-        @for (row of filteredScan(); track row.symbol) {
-          <tr>
-            <td>{{ row.symbol }}</td>
-            <td [class.reject]="!row.passed">{{ row.passed ? 'пройшли' : 'відсіяні' }}</td>
-            <td>{{ row.reason ?? '—' }}</td>
-          </tr>
-        }
-      </tbody>
-    </table>
+  <table>
+    <thead>
+      <tr>
+        <th>Символ</th>
+        <th>Стан</th>
+        <th>Причина</th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (row of filteredScan(); track row.symbol) {
+      <tr>
+        <td>{{ row.symbol }}</td>
+        <td [class.reject]="!row.passed">{{ row.passed ? 'пройшли' : 'відсіяні' }}</td>
+        <td>{{ row.reason ?? '—' }}</td>
+      </tr>
+      }
+    </tbody>
+  </table>
   }
 </section>

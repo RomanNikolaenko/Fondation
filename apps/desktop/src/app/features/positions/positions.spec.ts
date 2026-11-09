@@ -55,9 +55,7 @@ describe('Positions', () => {
     vi.stubGlobal('confirm', confirmMock);
 
     await vi.waitFor(() => {
-      expect(
-        (fixture.nativeElement as HTMLElement).querySelector('tbody button'),
-      ).not.toBeNull();
+      expect((fixture.nativeElement as HTMLElement).querySelector('tbody button')).not.toBeNull();
     });
 
     const close = (fixture.nativeElement as HTMLElement).querySelector(
@@ -71,48 +69,44 @@ describe('Positions', () => {
     confirmMock.mockReturnValue(true);
     close.click();
 
-    await vi.waitFor(() =>
-      expect(api.closePosition).toHaveBeenCalledWith('AAPL'),
-    );
+    await vi.waitFor(() => expect(api.closePosition).toHaveBeenCalledWith('AAPL'));
   });
 
   it('renders positions and open orders', async () => {
     const api = {
       getPositions: vi.fn().mockResolvedValue([POSITION]),
-      getOrders: vi
-        .fn()
-        .mockResolvedValue([
-          {
-            id: 'o-1',
-            client_order_id: 'c-1',
-            symbol: 'MSFT',
-            side: 'buy',
-            order_type: 'stop_limit',
-            qty: 10,
-            filled_qty: 0,
-            filled_avg_price: null,
-            limit_price: '101.00',
-            stop_price: '98.00',
-            status: 'accepted',
-            legs: [],
-            filled_at: null,
-          },
-          {
-            id: 'o-2',
-            client_order_id: 'c-2',
-            symbol: 'MSFT2',
-            side: 'sell',
-            order_type: 'limit',
-            qty: 5,
-            filled_qty: 5,
-            filled_avg_price: '100',
-            limit_price: '100',
-            stop_price: null,
-            status: 'filled',
-            legs: [],
-            filled_at: null,
-          },
-        ]),
+      getOrders: vi.fn().mockResolvedValue([
+        {
+          id: 'o-1',
+          client_order_id: 'c-1',
+          symbol: 'MSFT',
+          side: 'buy',
+          order_type: 'stop_limit',
+          qty: 10,
+          filled_qty: 0,
+          filled_avg_price: null,
+          limit_price: '101.00',
+          stop_price: '98.00',
+          status: 'accepted',
+          legs: [],
+          filled_at: null,
+        },
+        {
+          id: 'o-2',
+          client_order_id: 'c-2',
+          symbol: 'MSFT2',
+          side: 'sell',
+          order_type: 'limit',
+          qty: 5,
+          filled_qty: 5,
+          filled_avg_price: '100',
+          limit_price: '100',
+          stop_price: null,
+          status: 'filled',
+          legs: [],
+          filled_at: null,
+        },
+      ]),
     };
     TestBed.configureTestingModule({
       imports: [Positions],
@@ -133,9 +127,7 @@ describe('Positions', () => {
       const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
       expect(text).toContain('AAPL');
       expect(text).toContain('MSFT'); // відкритий
-      expect(
-        (fixture.nativeElement as HTMLElement).querySelectorAll('tbody tr').length,
-      ).toBe(2);
+      expect((fixture.nativeElement as HTMLElement).querySelectorAll('tbody tr').length).toBe(2);
     });
   });
 });

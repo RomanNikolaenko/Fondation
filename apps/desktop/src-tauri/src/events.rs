@@ -32,20 +32,14 @@ pub fn notification_for(event: &EngineEventDto) -> Option<(String, String)> {
         EngineEventDto::StopHit { symbol, price } => {
             Some(("Спрацював стоп".into(), format!("{symbol} @ {price}")))
         }
-        EngineEventDto::AutoPaused { reason } => {
-            Some(("Рушій на паузі".into(), reason.clone()))
+        EngineEventDto::AutoPaused { reason } => Some(("Рушій на паузі".into(), reason.clone())),
+        EngineEventDto::Killed { reason } => Some(("Аварійна зупинка".into(), reason.clone())),
+        EngineEventDto::StepFailed { step, error } => {
+            Some(("Крок не виконано".into(), format!("{step}: {error}")))
         }
-        EngineEventDto::Killed { reason } => {
-            Some(("Аварійна зупинка".into(), reason.clone()))
+        EngineEventDto::BacktestStatus { id, status } => {
+            Some(("Бектест".into(), format!("{id}: {status}")))
         }
-        EngineEventDto::StepFailed { step, error } => Some((
-            "Крок не виконано".into(),
-            format!("{step}: {error}"),
-        )),
-        EngineEventDto::BacktestStatus { id, status } => Some((
-            "Бектест".into(),
-            format!("{id}: {status}"),
-        )),
         EngineEventDto::Journal { .. }
         | EngineEventDto::StatusChanged
         | EngineEventDto::HistoryProgress { .. } => None,
@@ -84,7 +78,10 @@ pub async fn forward_events(app: AppHandle) {
                             .store(cfg.ui.notifications_enabled, Ordering::Relaxed);
                     }
 
-                    if app.state::<AppState>().notifications.load(Ordering::Relaxed)
+                    if app
+                        .state::<AppState>()
+                        .notifications
+                        .load(Ordering::Relaxed)
                         && let Some((title, body)) = notification_for(&event)
                     {
                         let _ = app.notification().builder().title(title).body(body).show();
@@ -122,7 +119,10 @@ mod tests {
             session: NaiveDate::from_ymd_opt(2026, 11, 5).unwrap(),
             count: 2,
         };
-        assert_eq!(notification_for(&pending).unwrap().0, "Нові угоди на схвалення");
+        assert_eq!(
+            notification_for(&pending).unwrap().0,
+            "Нові угоди на схвалення"
+        );
 
         let stop = EngineEventDto::StopHit {
             symbol: "AAPL".into(),

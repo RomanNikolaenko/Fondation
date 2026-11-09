@@ -1,4 +1,3 @@
-import { Component } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 
 import { EngineService } from '../../core/engine.service';
@@ -46,7 +45,11 @@ describe('ApprovalCard helpers', () => {
 describe('ApprovalCard', () => {
   afterEach(() => TestBed.resetTestingModule());
 
-  function setup(intentValue: Intent, equity: string | null, deadline: string | null): {
+  function setup(
+    intentValue: Intent,
+    equity: string | null,
+    deadline: string | null,
+  ): {
     nativeElement: HTMLElement;
   } {
     const api = { getBars: vi.fn().mockResolvedValue([]) };

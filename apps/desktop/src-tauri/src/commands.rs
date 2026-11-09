@@ -20,9 +20,14 @@ use crate::AppState;
 use crate::engine_client::{ClientError, EngineClient};
 
 async fn client(state: &State<'_, AppState>) -> Result<EngineClient, ClientError> {
-    state.client.read().await.clone().ok_or(ClientError::Unreachable {
-        message: "рушій ще запускається".into(),
-    })
+    state
+        .client
+        .read()
+        .await
+        .clone()
+        .ok_or(ClientError::Unreachable {
+            message: "рушій ще запускається".into(),
+        })
 }
 
 fn encode(value: &str) -> String {
@@ -89,10 +94,7 @@ pub async fn get_intents(
 }
 
 #[tauri::command]
-pub async fn approve_intent(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<Intent, ClientError> {
+pub async fn approve_intent(state: State<'_, AppState>, id: String) -> Result<Intent, ClientError> {
     client(&state)
         .await?
         .send::<(), Intent>(
@@ -104,10 +106,7 @@ pub async fn approve_intent(
 }
 
 #[tauri::command]
-pub async fn reject_intent(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<Intent, ClientError> {
+pub async fn reject_intent(state: State<'_, AppState>, id: String) -> Result<Intent, ClientError> {
     client(&state)
         .await?
         .send::<(), Intent>(
@@ -354,9 +353,7 @@ pub async fn import_universe(
 
 /// Секрети.
 #[tauri::command]
-pub async fn get_secrets(
-    state: State<'_, AppState>,
-) -> Result<Vec<SecretStatusDto>, ClientError> {
+pub async fn get_secrets(state: State<'_, AppState>) -> Result<Vec<SecretStatusDto>, ClientError> {
     client(&state).await?.get("/secrets").await
 }
 
@@ -369,14 +366,16 @@ pub async fn set_secret(
     let body = SetSecretRequest { value };
     client(&state)
         .await?
-        .send::<_, ()>(Method::PUT, &format!("/secrets/{}", encode(&key)), Some(&body))
+        .send::<_, ()>(
+            Method::PUT,
+            &format!("/secrets/{}", encode(&key)),
+            Some(&body),
+        )
         .await
 }
 
 #[tauri::command]
-pub async fn verify_secrets(
-    state: State<'_, AppState>,
-) -> Result<VerifyResultDto, ClientError> {
+pub async fn verify_secrets(state: State<'_, AppState>) -> Result<VerifyResultDto, ClientError> {
     client(&state)
         .await?
         .send::<(), VerifyResultDto>(Method::POST, "/secrets/verify", None)

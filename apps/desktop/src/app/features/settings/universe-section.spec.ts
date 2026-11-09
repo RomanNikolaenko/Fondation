@@ -40,7 +40,11 @@ describe('UniverseSection', () => {
       { symbol: 'XYZ', name: 'Мій тикер', sector: '—', source: 'manual', excluded: false },
     ]);
     api.setExcluded.mockResolvedValue({
-      symbol: 'MSFT', name: 'Microsoft', sector: 'Tech', source: 'sp500', excluded: true,
+      symbol: 'MSFT',
+      name: 'Microsoft',
+      sector: 'Tech',
+      source: 'sp500',
+      excluded: true,
     });
     api.removeSymbol.mockResolvedValue(undefined);
     configure(api);
@@ -49,9 +53,7 @@ describe('UniverseSection', () => {
     fixture.detectChanges();
 
     await vi.waitFor(() => {
-      expect(
-        (fixture.nativeElement as HTMLElement).querySelectorAll('tbody tr').length,
-      ).toBe(2);
+      expect((fixture.nativeElement as HTMLElement).querySelectorAll('tbody tr').length).toBe(2);
     });
 
     // Видалення лише для manual.
@@ -76,7 +78,11 @@ describe('UniverseSection', () => {
   it('add symbol calls addSymbol and clears the input', async () => {
     const api = apiMock();
     api.addSymbol.mockResolvedValue({
-      symbol: 'NVDA', name: 'Nvidia', sector: 'Tech', source: 'manual', excluded: false,
+      symbol: 'NVDA',
+      name: 'Nvidia',
+      sector: 'Tech',
+      source: 'manual',
+      excluded: false,
     });
     configure(api);
 
@@ -95,9 +101,7 @@ describe('UniverseSection', () => {
     fixture.detectChanges();
 
     (
-      (fixture.nativeElement as HTMLElement).querySelector(
-        '.add button',
-      ) as HTMLButtonElement
+      (fixture.nativeElement as HTMLElement).querySelector('.add button') as HTMLButtonElement
     ).click();
 
     await vi.waitFor(() => expect(api.addSymbol).toHaveBeenCalledWith('NVDA'));

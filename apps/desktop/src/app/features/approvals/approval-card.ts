@@ -12,7 +12,6 @@ import {
 import { EngineService } from '../../core/engine.service';
 import type { Bar } from '../../core/generated/Bar';
 import type { Intent } from '../../core/generated/Intent';
-import type { Verdict } from '../../core/generated/Verdict';
 import { formatEtKyiv, todayEt } from '../../core/tz';
 import { CandleChart } from '../../shared/candle-chart';
 
@@ -162,11 +161,7 @@ export class ApprovalCard implements OnInit, OnDestroy {
   private async loadChart(): Promise<void> {
     const to = todayEt();
     try {
-      const bars = await this.api.getBars(
-        this.intent().symbol,
-        daysBefore(to, CALENDAR_DAYS),
-        to,
-      );
+      const bars = await this.api.getBars(this.intent().symbol, daysBefore(to, CALENDAR_DAYS), to);
       this.chartBars.set(bars.slice(-CHART_BARS));
     } catch {
       // Графік не критичний: без даних просто не малюємо.

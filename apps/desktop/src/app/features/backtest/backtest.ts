@@ -1,11 +1,4 @@
-import {
-  Component,
-  DestroyRef,
-  OnInit,
-  computed,
-  inject,
-  signal,
-} from '@angular/core';
+import { Component, DestroyRef, OnInit, computed, inject, signal } from '@angular/core';
 import { Router } from '@angular/router';
 
 import { errorMessage } from '../../core/api-error';
@@ -140,10 +133,7 @@ export class Backtest implements OnInit {
   }
 
   /** Локальний перемикач стратегії (впливає лише на наступний запуск). */
-  protected toggleStrategy(
-    name: 'trend_pullback' | 'breakout',
-    event: Event,
-  ): void {
+  protected toggleStrategy(name: 'trend_pullback' | 'breakout', event: Event): void {
     this.strategies.update((current) => {
       if (!current) {
         return current;

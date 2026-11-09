@@ -2,7 +2,7 @@
   <h1>Бектест</h1>
 
   @if (error()) {
-    <p class="error" role="alert">{{ error() }}</p>
+  <p class="error" role="alert">{{ error() }}</p>
   }
 
   <div class="layout">
@@ -22,12 +22,7 @@
       </label>
       <label>
         <span>Початковий капітал</span>
-        <input
-          type="number"
-          name="equity"
-          [value]="initialEquity()"
-          (input)="setEquity($event)"
-        />
+        <input type="number" name="equity" [value]="initialEquity()" (input)="setEquity($event)" />
       </label>
 
       <div class="strategies">
@@ -51,110 +46,103 @@
         </label>
       </div>
 
-      <button type="button" class="primary" (click)="run()">
-        Запустити
-      </button>
+      <button type="button" class="primary" (click)="run()">Запустити</button>
       @if (runProgressText(); as progress) {
-        <p class="muted">{{ progress }}</p>
+      <p class="muted">{{ progress }}</p>
       }
 
       <button type="button" class="secondary" (click)="downloadHistory()">
         Завантажити історію з 2016
       </button>
       @if (historyProgress(); as progress) {
-        <p class="muted">{{ progress }}</p>
+      <p class="muted">{{ progress }}</p>
       }
     </aside>
 
     <div class="results">
       @if (detail(); as d) {
-        <section class="card">
-          <h2>Результат {{ d.run.id }}</h2>
-          @if (d.run.status === 'failed') {
-            <p class="error" role="alert">{{ d.run.error }}</p>
-          } @else if (d.run.status === 'done' && d.result; as result) {
-            <app-metrics-table [report]="result.metrics" />
-            <h3>Крива капіталу й просадки</h3>
-            <fond-equity-chart [points]="result.equity" [height]="320" />
-            <h3>Угоди ({{ totalTrades() }})</h3>
-            @if (totalTrades() > 0) {
-              <table>
-                <thead>
-                  <tr>
-                    <th>Символ</th>
-                    <th>Стратегія</th>
-                    <th>Вхід</th>
-                    <th>Вихід</th>
-                    <th>К-ть</th>
-                    <th>P&amp;L</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  @for (trade of trades(); track trade.entry_date + trade.symbol) {
-                    <tr
-                      class="trade"
-                      [attr.title]="'Відкрити графік ' + trade.symbol"
-                      (click)="openTrade(trade.symbol, trade.entry_date, trade.exit_date)"
-                    >
-                      <td>{{ trade.symbol }}</td>
-                      <td>{{ trade.strategy }}</td>
-                      <td>{{ trade.entry_date }} @ {{ trade.qty }} шт</td>
-                      <td>{{ trade.exit_date }} @ {{ trade.exit_price.toFixed(2) }}</td>
-                      <td>{{ trade.qty }}</td>
-                      <td [class.loss]="trade.pnl < 0">{{ trade.pnl.toFixed(2) }}</td>
-                    </tr>
-                  }
-                </tbody>
-              </table>
-            } @else {
-              <p class="muted">Угод немає.</p>
+      <section class="card">
+        <h2>Результат {{ d.run.id }}</h2>
+        @if (d.run.status === 'failed') {
+        <p class="error" role="alert">{{ d.run.error }}</p>
+        } @else if (d.run.status === 'done' && d.result; as result) {
+        <app-metrics-table [report]="result.metrics" />
+        <h3>Крива капіталу й просадки</h3>
+        <fond-equity-chart [points]="result.equity" [height]="320" />
+        <h3>Угоди ({{ totalTrades() }})</h3>
+        @if (totalTrades() > 0) {
+        <table>
+          <thead>
+            <tr>
+              <th>Символ</th>
+              <th>Стратегія</th>
+              <th>Вхід</th>
+              <th>Вихід</th>
+              <th>К-ть</th>
+              <th>P&amp;L</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (trade of trades(); track trade.entry_date + trade.symbol) {
+            <tr
+              class="trade"
+              [attr.title]="'Відкрити графік ' + trade.symbol"
+              (click)="openTrade(trade.symbol, trade.entry_date, trade.exit_date)"
+            >
+              <td>{{ trade.symbol }}</td>
+              <td>{{ trade.strategy }}</td>
+              <td>{{ trade.entry_date }} @ {{ trade.qty }} шт</td>
+              <td>{{ trade.exit_date }} @ {{ trade.exit_price.toFixed(2) }}</td>
+              <td>{{ trade.qty }}</td>
+              <td [class.loss]="trade.pnl < 0">{{ trade.pnl.toFixed(2) }}</td>
+            </tr>
             }
-
-            @if (limitations().length > 0) {
-              <h3>Обмеження оцінки</h3>
-              <ul class="limits">
-                @for (text of limitations(); track text) {
-                  <li>{{ text }}</li>
-                }
-              </ul>
-            }
-          } @else {
-            <p class="muted">{{ d.run.status === 'queued' ? 'У черзі…' : 'Виконується…' }}</p>
+          </tbody>
+        </table>
+        } @else {
+        <p class="muted">Угод немає.</p>
+        } @if (limitations().length > 0) {
+        <h3>Обмеження оцінки</h3>
+        <ul class="limits">
+          @for (text of limitations(); track text) {
+          <li>{{ text }}</li>
           }
-        </section>
+        </ul>
+        } } @else {
+        <p class="muted">{{ d.run.status === 'queued' ? 'У черзі…' : 'Виконується…' }}</p>
+        }
+      </section>
       }
 
       <section class="card">
         <h2>Попередні прогони</h2>
         @if (!loading() && runs().length === 0) {
-          <p class="muted">Прогонів ще не було.</p>
+        <p class="muted">Прогонів ще не було.</p>
         } @else if (loading()) {
-          <p class="muted">Завантаження…</p>
+        <p class="muted">Завантаження…</p>
         } @else {
-          <table>
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Створено</th>
-                <th>Статус</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              @for (run of runs(); track run.id) {
-                <tr>
-                  <td>{{ run.id }}</td>
-                  <td>{{ run.created_at | kyivDate }}</td>
-                  <td>{{ run.status }}</td>
-                  <td>
-                    <button type="button" class="secondary" (click)="openRun(run)">
-                      Відкрити
-                    </button>
-                  </td>
-                </tr>
-              }
-            </tbody>
-          </table>
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Створено</th>
+              <th>Статус</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (run of runs(); track run.id) {
+            <tr>
+              <td>{{ run.id }}</td>
+              <td>{{ run.created_at | kyivDate }}</td>
+              <td>{{ run.status }}</td>
+              <td>
+                <button type="button" class="secondary" (click)="openRun(run)">Відкрити</button>
+              </td>
+            </tr>
+            }
+          </tbody>
+        </table>
         }
       </section>
     </div>

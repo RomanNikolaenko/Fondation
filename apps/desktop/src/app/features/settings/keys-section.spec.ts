@@ -55,11 +55,9 @@ describe('KeysSection', () => {
       expect(text).toContain('немає');
     });
 
-    for (const input of [
-      ...(fixture.nativeElement as HTMLElement).querySelectorAll<HTMLInputElement>(
-        'input[type="password"]',
-      ),
-    ]) {
+    for (const input of (fixture.nativeElement as HTMLElement).querySelectorAll<HTMLInputElement>(
+      'input[type="password"]',
+    )) {
       expect(input.value).toBe('');
     }
   });

@@ -46,7 +46,12 @@ const CONFIG: EngineConfig = {
     submit_window_end: '09:55',
     reconcile_every_minutes: 5,
   },
-  scanner: { min_price: 5, min_avg_dollar_volume: 5_000_000, avg_window: 30, min_history_bars: 200 },
+  scanner: {
+    min_price: 5,
+    min_avg_dollar_volume: 5_000_000,
+    avg_window: 30,
+    min_history_bars: 200,
+  },
   risk: {
     risk_per_trade: 0.01,
     max_open_positions: 6,
@@ -73,7 +78,12 @@ const CONFIG: EngineConfig = {
     input_usd_per_mtok: 0.8,
     output_usd_per_mtok: 4,
   },
-  earnings_filter: { enabled: true, days_ahead: 3, lookahead_calendar_days: 30, on_unavailable: 'block' },
+  earnings_filter: {
+    enabled: true,
+    days_ahead: 3,
+    lookahead_calendar_days: 30,
+    on_unavailable: 'block',
+  },
   backtest: { slippage_bps: 2, commission_per_share: 0.005, commission_min: 1 },
   ui: { disclaimer_accepted_at: null, notifications_enabled: true },
 };
@@ -127,15 +137,11 @@ describe('Strategies screen', () => {
     const fixture = TestBed.createComponent(Strategies);
     fixture.detectChanges();
     await vi.waitFor(() => {
-      expect(
-        (fixture.nativeElement as HTMLElement).querySelectorAll('fieldset').length,
-      ).toBe(3);
+      expect((fixture.nativeElement as HTMLElement).querySelectorAll('fieldset').length).toBe(3);
     });
 
     (
-      (fixture.nativeElement as HTMLElement).querySelector(
-        'button.primary',
-      ) as HTMLButtonElement
+      (fixture.nativeElement as HTMLElement).querySelector('button.primary') as HTMLButtonElement
     ).click();
 
     await vi.waitFor(() => {

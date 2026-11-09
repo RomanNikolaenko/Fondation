@@ -22,9 +22,7 @@ type Presence = Record<string, boolean>;
   template: `
     <fieldset class="card">
       <legend>Ключі</legend>
-      <p class="hint">
-        Збережені значення не показуються — лише стан «збережено / немає».
-      </p>
+      <p class="hint">Збережені значення не показуються — лише стан «збережено / немає».</p>
       @for (field of keys; track field.key) {
         <div class="row">
           <label>
@@ -43,7 +41,8 @@ type Presence = Record<string, boolean>;
           <button
             type="button"
             class="secondary"
-            [attr.data-fieldkey]="field.key"            [disabled]="!(entry(field.key).length > 0)"
+            [attr.data-fieldkey]="field.key"
+            [disabled]="!(entry(field.key).length > 0)"
             (click)="saveSecret(field.key)"
           >
             Зберегти
@@ -51,24 +50,22 @@ type Presence = Record<string, boolean>;
         </div>
       }
       <div class="verify">
-        <button type="button" class="secondary" (click)="runVerify()">
-          Перевірити
-        </button>
+        <button type="button" class="secondary" (click)="runVerify()">Перевірити</button>
         @if (verifying()) {
           <span class="muted">Перевірка триває…</span>
         }
       </div>
       @if (verify(); as v) {
         <ul class="results">
-          <li
-            [class.fail]="!v.alpaca.ok"
-          >Alpaca: {{ v.alpaca.ok ? 'ok' : v.alpaca.message ?? 'помилка' }}</li>
-          <li
-            [class.fail]="!v.finnhub.ok"
-          >Finnhub: {{ v.finnhub.ok ? 'ok' : v.finnhub.message ?? 'помилка' }}</li>
-          <li
-            [class.fail]="!v.anthropic.ok"
-          >Anthropic: {{ v.anthropic.ok ? 'ok' : v.anthropic.message ?? 'помилка' }}</li>
+          <li [class.fail]="!v.alpaca.ok">
+            Alpaca: {{ v.alpaca.ok ? 'ok' : (v.alpaca.message ?? 'помилка') }}
+          </li>
+          <li [class.fail]="!v.finnhub.ok">
+            Finnhub: {{ v.finnhub.ok ? 'ok' : (v.finnhub.message ?? 'помилка') }}
+          </li>
+          <li [class.fail]="!v.anthropic.ok">
+            Anthropic: {{ v.anthropic.ok ? 'ok' : (v.anthropic.message ?? 'помилка') }}
+          </li>
         </ul>
       }
       @if (error(); as message) {

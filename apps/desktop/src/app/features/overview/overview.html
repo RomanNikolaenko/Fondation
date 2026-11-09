@@ -15,7 +15,7 @@
   </header>
 
   @if (error()) {
-    <p class="error" role="alert">{{ error() }}</p>
+  <p class="error" role="alert">{{ error() }}</p>
   }
 
   <div class="grid">
@@ -23,18 +23,16 @@
       <h2>Рушій</h2>
       <p class="value">{{ modeText() }}</p>
       @if (store.status()?.engine_mode?.reason; as reason) {
-        <p class="muted">{{ reason }}</p>
-      }
-      @if (store.status()?.next_step; as step) {
-        <p class="muted">Наступний крок: {{ nextStepAt(step.at) }}</p>
+      <p class="muted">{{ reason }}</p>
+      } @if (store.status()?.next_step; as step) {
+      <p class="muted">Наступний крок: {{ nextStepAt(step.at) }}</p>
       } @else {
-        <p class="muted">Наступний крок: —</p>
-      }
-      @if (store.status()?.needs_setup?.length) {
-        <p class="warning">
-          Додайте ключі API:
-          <a routerLink="/settings">перейти в налаштування</a>
-        </p>
+      <p class="muted">Наступний крок: —</p>
+      } @if (store.status()?.needs_setup?.length) {
+      <p class="warning">
+        Додайте ключі API:
+        <a routerLink="/settings">перейти в налаштування</a>
+      </p>
       }
     </article>
 
@@ -47,15 +45,11 @@
         </div>
         <div>
           <dt>За день</dt>
-          <dd [class.loss]="isLoss(account()?.day_pnl)">
-            {{ account()?.day_pnl | money }}
-          </dd>
+          <dd [class.loss]="isLoss(account()?.day_pnl)">{{ account()?.day_pnl | money }}</dd>
         </div>
         <div>
           <dt>За тиждень</dt>
-          <dd [class.loss]="isLoss(account()?.week_pnl)">
-            {{ account()?.week_pnl | money }}
-          </dd>
+          <dd [class.loss]="isLoss(account()?.week_pnl)">{{ account()?.week_pnl | money }}</dd>
         </div>
       </dl>
     </article>
@@ -95,17 +89,17 @@
     <article class="card card--wide">
       <h2>Стрічка подій</h2>
       @if (feed().length === 0) {
-        <p class="muted">Подій ще немає.</p>
+      <p class="muted">Подій ще немає.</p>
       } @else {
-        <ul class="feed">
-          @for (event of feed(); track event.id) {
-            <li>
-              <span class="when">{{ event.at | etKyivTime }}</span>
-              <span class="kind">{{ event.kind }}</span>
-              <span class="message">{{ event.message }}</span>
-            </li>
-          }
-        </ul>
+      <ul class="feed">
+        @for (event of feed(); track event.id) {
+        <li>
+          <span class="when">{{ event.at | etKyivTime }}</span>
+          <span class="kind">{{ event.kind }}</span>
+          <span class="message">{{ event.message }}</span>
+        </li>
+        }
+      </ul>
       }
     </article>
   </div>

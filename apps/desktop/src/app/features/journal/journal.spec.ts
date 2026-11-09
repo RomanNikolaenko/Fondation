@@ -50,21 +50,15 @@ describe('Journal', () => {
     expect(initial['from']).toBeUndefined();
 
     // Фільтри: символ і типи, потім «Застосувати».
-    const symbol = fixture.nativeElement.querySelector(
-      'input[name="symbol"]',
-    ) as HTMLInputElement;
+    const symbol = fixture.nativeElement.querySelector('input[name="symbol"]') as HTMLInputElement;
     symbol.value = 'MSFT';
     symbol.dispatchEvent(new Event('input'));
 
-    const kinds = fixture.nativeElement.querySelector(
-      'input[name="kinds"]',
-    ) as HTMLInputElement;
+    const kinds = fixture.nativeElement.querySelector('input[name="kinds"]') as HTMLInputElement;
     kinds.value = 'fill,order';
     kinds.dispatchEvent(new Event('input'));
 
-    const form = (fixture.nativeElement as HTMLElement).querySelector(
-      'form',
-    ) as HTMLFormElement;
+    const form = (fixture.nativeElement as HTMLElement).querySelector('form') as HTMLFormElement;
     form.dispatchEvent(new Event('submit', { cancelable: true }));
 
     await vi.waitFor(() => expect(api.getJournal).toHaveBeenCalledTimes(2));

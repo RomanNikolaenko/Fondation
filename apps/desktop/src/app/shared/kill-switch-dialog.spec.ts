@@ -76,9 +76,7 @@ describe('KillSwitchDialog', () => {
   it('kill dialog sends true when closing positions selected', async () => {
     const { fixture, api } = setup();
 
-    const close = fixture.nativeElement.querySelector(
-      'input[value="close"]',
-    ) as HTMLInputElement;
+    const close = fixture.nativeElement.querySelector('input[value="close"]') as HTMLInputElement;
     close.click();
     fixture.detectChanges();
     acknowledge(fixture);

@@ -2,12 +2,8 @@ import { etWallTimeToUtc, formatEtKyiv, todayEt } from './tz';
 
 describe('tz', () => {
   it('etWallTimeToUtc handles EST and EDT', () => {
-    expect(etWallTimeToUtc('2026-11-05', '08:55').toISOString()).toBe(
-      '2026-11-05T13:55:00.000Z',
-    );
-    expect(etWallTimeToUtc('2026-10-28', '16:30').toISOString()).toBe(
-      '2026-10-28T20:30:00.000Z',
-    );
+    expect(etWallTimeToUtc('2026-11-05', '08:55').toISOString()).toBe('2026-11-05T13:55:00.000Z');
+    expect(etWallTimeToUtc('2026-10-28', '16:30').toISOString()).toBe('2026-10-28T20:30:00.000Z');
   });
 
   it('etWallTimeToUtc accepts seconds', () => {

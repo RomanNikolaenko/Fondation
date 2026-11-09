@@ -175,9 +175,7 @@ describe('Settings screen', () => {
     input.dispatchEvent(new Event('input'));
 
     (
-      (fixture.nativeElement as HTMLElement).querySelector(
-        'button.primary',
-      ) as HTMLButtonElement
+      (fixture.nativeElement as HTMLElement).querySelector('button.primary') as HTMLButtonElement
     ).click();
 
     await vi.waitFor(() => expect(api.putConfig).toHaveBeenCalledTimes(1));

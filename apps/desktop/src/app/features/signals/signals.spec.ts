@@ -45,10 +45,7 @@ describe('Signals helpers', () => {
 describe('Signals screen', () => {
   afterEach(() => TestBed.resetTestingModule());
 
-  function configure(
-    api: Partial<EngineService>,
-    status: StatusDto | null,
-  ): void {
+  function configure(api: Partial<EngineService>, status: StatusDto | null): void {
     const store = {
       status: signal(status),
       config: signal(null),

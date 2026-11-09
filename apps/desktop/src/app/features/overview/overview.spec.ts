@@ -139,9 +139,7 @@ describe('Overview', () => {
     fixture.detectChanges();
     expect(buttonTexts(fixture)).toContain('Пауза');
 
-    statusSignal.set(
-      status({ engine_mode: { state: 'paused', reason: 'тижневий ліміт' } }),
-    );
+    statusSignal.set(status({ engine_mode: { state: 'paused', reason: 'тижневий ліміт' } }));
     fixture.detectChanges();
     expect(buttonTexts(fixture)).toContain('Відновити');
   });

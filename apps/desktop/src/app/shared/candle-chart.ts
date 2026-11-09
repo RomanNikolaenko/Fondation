@@ -74,9 +74,7 @@ function cssColor(name: string, fallback: string): string {
   if (typeof getComputedStyle !== 'function') {
     return fallback;
   }
-  const value = getComputedStyle(document.documentElement)
-    .getPropertyValue(name)
-    .trim();
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   return value === '' ? fallback : value;
 }
 
@@ -95,7 +93,8 @@ export { cssColor };
       width: 100%;
     }
   `,
-})export class CandleChart implements OnDestroy {
+})
+export class CandleChart implements OnDestroy {
   readonly bars = input.required<Bar[]>();
   readonly markers = input<ChartMarker[]>([]);
   readonly overlays = input<ChartOverlay[]>([]);
@@ -165,11 +164,7 @@ export { cssColor };
     }
   }
 
-  private render(
-    bars: Bar[],
-    markers: ChartMarker[],
-    overlays: ChartOverlay[],
-  ): void {
+  private render(bars: Bar[], markers: ChartMarker[], overlays: ChartOverlay[]): void {
     if (!this.chart || !this.candles) {
       return;
     }

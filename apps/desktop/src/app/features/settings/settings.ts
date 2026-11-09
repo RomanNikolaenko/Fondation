@@ -2,7 +2,6 @@ import { Component, OnInit, inject, signal } from '@angular/core';
 
 import { errorMessage } from '../../core/api-error';
 import { EngineService } from '../../core/engine.service';
-import type { EarningsFilterConfig } from '../../core/generated/EarningsFilterConfig';
 import type { EngineConfig } from '../../core/generated/EngineConfig';
 import type { ExecutionMode } from '../../core/generated/ExecutionMode';
 import type { NewsFilterConfig } from '../../core/generated/NewsFilterConfig';
@@ -148,8 +147,7 @@ export class Settings implements OnInit {
   protected onModeChange(event: Event): void {
     const select = event.target as HTMLSelectElement;
     const wanted: ExecutionMode = select.value === 'auto' ? 'auto' : 'approval';
-    if (wanted === 'auto' && this.config()?.execution_mode !== 'auto'
-      && !confirm(AUTO_WARNING)) {
+    if (wanted === 'auto' && this.config()?.execution_mode !== 'auto' && !confirm(AUTO_WARNING)) {
       select.value = this.config()?.execution_mode ?? 'approval';
       return;
     }
@@ -191,9 +189,10 @@ export class Settings implements OnInit {
   // ---------------------------------------------------------- розклад
 
   protected setSchedule(key: keyof ScheduleConfig, event: Event): void {
-    const value: string | number = key === 'reconcile_every_minutes'
-      ? Math.max(1, Math.round(numValue(event) || 0))
-      : inputValue(event);
+    const value: string | number =
+      key === 'reconcile_every_minutes'
+        ? Math.max(1, Math.round(numValue(event) || 0))
+        : inputValue(event);
     this.patch((draft) => {
       (draft.schedule as Record<string, string | number>)[key] = value;
     });

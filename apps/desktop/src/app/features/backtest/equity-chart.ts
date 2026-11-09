@@ -131,12 +131,8 @@ export class EquityChart implements OnDestroy {
     if (!this.chart || !this.equity || !this.benchmark || !this.drawdown) {
       return;
     }
-    this.equity.setData(
-      points.map((p) => ({ time: p.date, value: p.equity })),
-    );
-    this.benchmark.setData(
-      points.map((p) => ({ time: p.date, value: p.benchmark })),
-    );
+    this.equity.setData(points.map((p) => ({ time: p.date, value: p.equity })));
+    this.benchmark.setData(points.map((p) => ({ time: p.date, value: p.benchmark })));
     this.drawdown.setData(drawdownSeries(points));
     this.chart.timeScale().fitContent();
   }

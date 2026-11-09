@@ -20,8 +20,7 @@ export function lastSession(now: Date): string {
     month: '2-digit',
     day: '2-digit',
   }).formatToParts(now);
-  const num = (type: string): number =>
-    Number(parts.find((p) => p.type === type)?.value ?? 0);
+  const num = (type: string): number => Number(parts.find((p) => p.type === type)?.value ?? 0);
   const date = new Date(Date.UTC(num('year'), num('month') - 1, num('day')));
   const weekday = date.getUTCDay();
   if (weekday === 0) {
@@ -86,9 +85,7 @@ export class Signals implements OnInit {
     const nowIso = this.store.status()?.now;
     this.date.set(lastSession(new Date(nowIso ?? Date.now())));
     void this.reload();
-    this.destroyRef.onDestroy(
-      this.events.on('journal', () => void this.reload()),
-    );
+    this.destroyRef.onDestroy(this.events.on('journal', () => void this.reload()));
   }
 
   protected setDate(event: Event): void {

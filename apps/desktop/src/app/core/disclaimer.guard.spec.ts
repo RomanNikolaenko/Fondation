@@ -30,9 +30,7 @@ describe('disclaimerGuard', () => {
 
   it('allows when accepted', async () => {
     const api = {
-      getConfig: vi
-        .fn()
-        .mockResolvedValue(configWith('2026-11-05T13:00:00.000Z')),
+      getConfig: vi.fn().mockResolvedValue(configWith('2026-11-05T13:00:00.000Z')),
     };
     TestBed.configureTestingModule({
       providers: [provideRouter([]), { provide: EngineService, useValue: api }],

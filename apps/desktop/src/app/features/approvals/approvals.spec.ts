@@ -16,9 +16,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 @Component({
   selector: 'app-approval-card',
   standalone: true,
-  template: `
-    <button class="approve" (click)="approve.emit(intent().id)">approve</button>
-  `,
+  template: ` <button class="approve" (click)="approve.emit(intent().id)">approve</button> `,
 })
 class ApprovalCardStub {
   intent = input.required<Intent>();
@@ -84,12 +82,8 @@ describe('Approvals', () => {
   afterEach(() => TestBed.resetTestingModule());
 
   it('deadline countdown uses ET schedule', () => {
-    expect(deadlineFor('2026-11-09', '08:55').toISOString()).toBe(
-      '2026-11-09T13:55:00.000Z',
-    );
-    expect(deadlineFor('2026-10-28', '16:30').toISOString()).toBe(
-      '2026-10-28T20:30:00.000Z',
-    );
+    expect(deadlineFor('2026-11-09', '08:55').toISOString()).toBe('2026-11-09T13:55:00.000Z');
+    expect(deadlineFor('2026-10-28', '16:30').toISOString()).toBe('2026-10-28T20:30:00.000Z');
   });
 
   it('approve calls approveIntent and removes the card', async () => {
@@ -105,8 +99,7 @@ describe('Approvals', () => {
 
     await vi.waitFor(() =>
       expect(
-        (fixture.nativeElement as HTMLElement).querySelectorAll('app-approval-card')
-          .length,
+        (fixture.nativeElement as HTMLElement).querySelectorAll('app-approval-card').length,
       ).toBe(2),
     );
 
@@ -118,8 +111,7 @@ describe('Approvals', () => {
     await vi.waitFor(() => expect(api.approveIntent).toHaveBeenCalledWith('i-1'));
     await vi.waitFor(() =>
       expect(
-        (fixture.nativeElement as HTMLElement).querySelectorAll('app-approval-card')
-          .length,
+        (fixture.nativeElement as HTMLElement).querySelectorAll('app-approval-card').length,
       ).toBe(1),
     );
     fixture.destroy();

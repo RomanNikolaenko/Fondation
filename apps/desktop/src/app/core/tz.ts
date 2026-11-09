@@ -75,7 +75,6 @@ export function todayEt(now: Date = new Date()): string {
     month: '2-digit',
     day: '2-digit',
   }).formatToParts(now);
-  const value = (type: string): string =>
-    parts.find((p) => p.type === type)?.value ?? '';
+  const value = (type: string): string => parts.find((p) => p.type === type)?.value ?? '';
   return `${value('year')}-${value('month')}-${value('day')}`;
 }

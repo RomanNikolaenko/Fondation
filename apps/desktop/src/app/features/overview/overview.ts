@@ -1,12 +1,4 @@
-import {
-  Component,
-  DestroyRef,
-  OnInit,
-  computed,
-  inject,
-  signal,
-  viewChild,
-} from '@angular/core';
+import { Component, DestroyRef, OnInit, computed, inject, signal, viewChild } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
 import { errorMessage } from '../../core/api-error';
@@ -77,10 +69,7 @@ export class Overview implements OnInit {
     if (!(equity > 0)) {
       return 0;
     }
-    const value = this.positions().reduce(
-      (sum, p) => sum + p.qty * Number(p.current_price),
-      0,
-    );
+    const value = this.positions().reduce((sum, p) => sum + p.qty * Number(p.current_price), 0);
     return value / equity;
   });
 

@@ -12,126 +12,216 @@
   </header>
 
   @if (error()) {
-    <p class="error" role="alert">{{ error() }}</p>
-  }
-  @if (clientErrors().length > 0) {
-    <ul class="client-errors" role="alert">
-      @for (problem of clientErrors(); track problem) {
-        <li>{{ problem }}</li>
-      }
-    </ul>
-  }
-  @if (saved()) {
-    <p class="ok">Збережено.</p>
-  }
-
-  @if (strategies(); as s) {
-    <fieldset class="card">
-      <legend>
-        <label class="enabled">
-          <input
-            type="checkbox"
-            name="tp_enabled"
-            [checked]="s.trend_pullback.enabled"
-            (change)="setTpEnabled($event)"
-          />
-          trend_pullback
-        </label>
-      </legend>
-      <label>
-        <span>Частка, %</span>
+  <p class="error" role="alert">{{ error() }}</p>
+  } @if (clientErrors().length > 0) {
+  <ul class="client-errors" role="alert">
+    @for (problem of clientErrors(); track problem) {
+    <li>{{ problem }}</li>
+    }
+  </ul>
+  } @if (saved()) {
+  <p class="ok">Збережено.</p>
+  } @if (strategies(); as s) {
+  <fieldset class="card">
+    <legend>
+      <label class="enabled">
         <input
-          type="number"
-          name="tp_allocation"
-          step="0.1"
-          [value]="allocPct(s.trend_pullback.allocation)"
-          (input)="setTpAlloc($event)"
+          type="checkbox"
+          name="tp_enabled"
+          [checked]="s.trend_pullback.enabled"
+          (change)="setTpEnabled($event)"
         />
+        trend_pullback
       </label>
-      <label><span>SMAL довга</span>
-        <input type="number" name="tp_sma_long" [value]="s.trend_pullback.sma_long" (input)="setTp('sma_long', $event)" />
-      </label>
-      <label><span>SMAL середня</span>
-        <input type="number" name="tp_sma_mid" [value]="s.trend_pullback.sma_mid" (input)="setTp('sma_mid', $event)" />
-      </label>
-      <label><span>RSI період</span>
-        <input type="number" name="tp_rsi_period" [value]="s.trend_pullback.rsi_period" (input)="setTp('rsi_period', $event)" />
-      </label>
-      <label><span>RSI для входу</span>
-        <input type="number" name="tp_rsi_entry" [value]="s.trend_pullback.rsi_entry" (input)="setTp('rsi_entry', $event)" />
-      </label>
-      <label><span>ATR період</span>
-        <input type="number" name="tp_atr_period" [value]="s.trend_pullback.atr_period" (input)="setTp('atr_period', $event)" />
-      </label>
-      <label><span>Стоп × ATR</span>
-        <input type="number" name="tp_atr_stop_mult" step="0.1" [value]="s.trend_pullback.atr_stop_mult" (input)="setTp('atr_stop_mult', $event)" />
-      </label>
-      <label><span>Вихідна SMA</span>
-        <input type="number" name="tp_exit_sma" [value]="s.trend_pullback.exit_sma" (input)="setTp('exit_sma', $event)" />
-      </label>
-      <label><span>Максимальних днів у позиції</span>
-        <input type="number" name="tp_max_hold_days" [value]="s.trend_pullback.max_hold_days" (input)="setTp('max_hold_days', $event)" />
-      </label>
-    </fieldset>
+    </legend>
+    <label>
+      <span>Частка, %</span>
+      <input
+        type="number"
+        name="tp_allocation"
+        step="0.1"
+        [value]="allocPct(s.trend_pullback.allocation)"
+        (input)="setTpAlloc($event)"
+      />
+    </label>
+    <label
+      ><span>SMAL довга</span>
+      <input
+        type="number"
+        name="tp_sma_long"
+        [value]="s.trend_pullback.sma_long"
+        (input)="setTp('sma_long', $event)"
+      />
+    </label>
+    <label
+      ><span>SMAL середня</span>
+      <input
+        type="number"
+        name="tp_sma_mid"
+        [value]="s.trend_pullback.sma_mid"
+        (input)="setTp('sma_mid', $event)"
+      />
+    </label>
+    <label
+      ><span>RSI період</span>
+      <input
+        type="number"
+        name="tp_rsi_period"
+        [value]="s.trend_pullback.rsi_period"
+        (input)="setTp('rsi_period', $event)"
+      />
+    </label>
+    <label
+      ><span>RSI для входу</span>
+      <input
+        type="number"
+        name="tp_rsi_entry"
+        [value]="s.trend_pullback.rsi_entry"
+        (input)="setTp('rsi_entry', $event)"
+      />
+    </label>
+    <label
+      ><span>ATR період</span>
+      <input
+        type="number"
+        name="tp_atr_period"
+        [value]="s.trend_pullback.atr_period"
+        (input)="setTp('atr_period', $event)"
+      />
+    </label>
+    <label
+      ><span>Стоп × ATR</span>
+      <input
+        type="number"
+        name="tp_atr_stop_mult"
+        step="0.1"
+        [value]="s.trend_pullback.atr_stop_mult"
+        (input)="setTp('atr_stop_mult', $event)"
+      />
+    </label>
+    <label
+      ><span>Вихідна SMA</span>
+      <input
+        type="number"
+        name="tp_exit_sma"
+        [value]="s.trend_pullback.exit_sma"
+        (input)="setTp('exit_sma', $event)"
+      />
+    </label>
+    <label
+      ><span>Максимальних днів у позиції</span>
+      <input
+        type="number"
+        name="tp_max_hold_days"
+        [value]="s.trend_pullback.max_hold_days"
+        (input)="setTp('max_hold_days', $event)"
+      />
+    </label>
+  </fieldset>
 
-    <fieldset class="card">
-      <legend>
-        <label class="enabled">
-          <input
-            type="checkbox"
-            name="bo_enabled"
-            [checked]="s.breakout.enabled"
-            (change)="setBoEnabled($event)"
-          />
-          breakout
-        </label>
-      </legend>
-      <label>
-        <span>Частка, %</span>
+  <fieldset class="card">
+    <legend>
+      <label class="enabled">
         <input
-          type="number"
-          name="bo_allocation"
-          step="0.1"
-          [value]="allocPct(s.breakout.allocation)"
-          (input)="setBoAlloc($event)"
+          type="checkbox"
+          name="bo_enabled"
+          [checked]="s.breakout.enabled"
+          (change)="setBoEnabled($event)"
         />
+        breakout
       </label>
-      <label><span>Вікно пробою, днів</span>
-        <input type="number" name="bo_entry_lookback" [value]="s.breakout.entry_lookback" (input)="setBo('entry_lookback', $event)" />
-      </label>
-      <label><span>Обʼєм × середньої</span>
-        <input type="number" name="bo_volume_mult" step="0.1" [value]="s.breakout.volume_mult" (input)="setBo('volume_mult', $event)" />
-      </label>
-      <label><span>Середня обсягів, днів</span>
-        <input type="number" name="bo_volume_avg" [value]="s.breakout.volume_avg" (input)="setBo('volume_avg', $event)" />
-      </label>
-      <label><span>ATR період</span>
-        <input type="number" name="bo_atr_period" [value]="s.breakout.atr_period" (input)="setBo('atr_period', $event)" />
-      </label>
-      <label><span>Стоп × ATR</span>
-        <input type="number" name="bo_atr_stop_mult" step="0.1" [value]="s.breakout.atr_stop_mult" (input)="setBo('atr_stop_mult', $event)" />
-      </label>
-      <label><span>Вікно трейлінга, днів</span>
-        <input type="number" name="bo_trail_lookback" [value]="s.breakout.trail_lookback" (input)="setBo('trail_lookback', $event)" />
-      </label>
-    </fieldset>
+    </legend>
+    <label>
+      <span>Частка, %</span>
+      <input
+        type="number"
+        name="bo_allocation"
+        step="0.1"
+        [value]="allocPct(s.breakout.allocation)"
+        (input)="setBoAlloc($event)"
+      />
+    </label>
+    <label
+      ><span>Вікно пробою, днів</span>
+      <input
+        type="number"
+        name="bo_entry_lookback"
+        [value]="s.breakout.entry_lookback"
+        (input)="setBo('entry_lookback', $event)"
+      />
+    </label>
+    <label
+      ><span>Обʼєм × середньої</span>
+      <input
+        type="number"
+        name="bo_volume_mult"
+        step="0.1"
+        [value]="s.breakout.volume_mult"
+        (input)="setBo('volume_mult', $event)"
+      />
+    </label>
+    <label
+      ><span>Середня обсягів, днів</span>
+      <input
+        type="number"
+        name="bo_volume_avg"
+        [value]="s.breakout.volume_avg"
+        (input)="setBo('volume_avg', $event)"
+      />
+    </label>
+    <label
+      ><span>ATR період</span>
+      <input
+        type="number"
+        name="bo_atr_period"
+        [value]="s.breakout.atr_period"
+        (input)="setBo('atr_period', $event)"
+      />
+    </label>
+    <label
+      ><span>Стоп × ATR</span>
+      <input
+        type="number"
+        name="bo_atr_stop_mult"
+        step="0.1"
+        [value]="s.breakout.atr_stop_mult"
+        (input)="setBo('atr_stop_mult', $event)"
+      />
+    </label>
+    <label
+      ><span>Вікно трейлінга, днів</span>
+      <input
+        type="number"
+        name="bo_trail_lookback"
+        [value]="s.breakout.trail_lookback"
+        (input)="setBo('trail_lookback', $event)"
+      />
+    </label>
+  </fieldset>
 
-    <fieldset class="card">
-      <legend>Ринковий фільтр</legend>
-      <label><span>Бенчмарк</span>
-        <input
-          type="text"
-          name="mf_symbol"
-          autocomplete="off"
-          [value]="s.market_filter.symbol"
-          (input)="setMarketSymbol($event)"
-        />
-      </label>
-      <label><span>SMAL бенчмарку</span>
-        <input type="number" name="mf_sma" [value]="s.market_filter.sma" (input)="setMarketSma($event)" />
-      </label>
-    </fieldset>
+  <fieldset class="card">
+    <legend>Ринковий фільтр</legend>
+    <label
+      ><span>Бенчмарк</span>
+      <input
+        type="text"
+        name="mf_symbol"
+        autocomplete="off"
+        [value]="s.market_filter.symbol"
+        (input)="setMarketSymbol($event)"
+      />
+    </label>
+    <label
+      ><span>SMAL бенчмарку</span>
+      <input
+        type="number"
+        name="mf_sma"
+        [value]="s.market_filter.sma"
+        (input)="setMarketSma($event)"
+      />
+    </label>
+  </fieldset>
   } @else {
-    <p class="muted">Завантаження…</p>
+  <p class="muted">Завантаження…</p>
   }
 </section>

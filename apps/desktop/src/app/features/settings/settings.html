@@ -12,10 +12,9 @@
   </header>
 
   @if (error()) {
-    <p class="error" role="alert">{{ error() }}</p>
-  }
-  @if (saved()) {
-    <p class="ok">Збережено.</p>
+  <p class="error" role="alert">{{ error() }}</p>
+  } @if (saved()) {
+  <p class="ok">Збережено.</p>
   }
 
   <app-keys-section />
@@ -30,24 +29,24 @@
       </select>
     </label>
     <p class="hint">
-      «Авто» надсилає угоди брокеру без підтвердження — переконайтеся, що бектест
-      і ліміти вас влаштовують.
+      «Авто» надсилає угоди брокеру без підтвердження — переконайтеся, що бектест і ліміти вас
+      влаштовують.
     </p>
   </fieldset>
 
   <fieldset class="card">
     <legend>Ліміти ризику</legend>
     @for (field of riskFields; track field.key) {
-      <label>
-        <span>{{ field.label }}</span>
-        <input
-          type="number"
-          name="{{ field.key }}"
-          step="0.1"
-          [value]="riskPercent(field.key)"
-          (input)="setRisk(field.key, $event)"
-        />
-      </label>
+    <label>
+      <span>{{ field.label }}</span>
+      <input
+        type="number"
+        name="{{ field.key }}"
+        step="0.1"
+        [value]="riskPercent(field.key)"
+        (input)="setRisk(field.key, $event)"
+      />
+    </label>
     }
     <label>
       <span>Максимально відкритих позицій</span>
@@ -70,155 +69,155 @@
   </fieldset>
 
   @if (config(); as cfg) {
-    <fieldset class="card">
-      <legend>Розклад (час ET)</legend>
-      <label>
-        <span>Аналіз сигналів</span>
-        <input
-          type="time"
-          name="analysis"
-          [value]="scheduleTime('analysis')"
-          (input)="setSchedule('analysis', $event)"
-        />
-        <em class="hint">Київ ≈ {{ hint('analysis') }}</em>
-      </label>
-      <label>
-        <span>Дедлайн схвалення</span>
-        <input
-          type="time"
-          name="approval_deadline"
-          [value]="scheduleTime('approval_deadline')"
-          (input)="setSchedule('approval_deadline', $event)"
-        />
-        <em class="hint">Київ ≈ {{ hint('approval_deadline') }}</em>
-      </label>
-      <label>
-        <span>Вікно надсилання — початок</span>
-        <input
-          type="time"
-          name="submit_window_start"
-          [value]="scheduleTime('submit_window_start')"
-          (input)="setSchedule('submit_window_start', $event)"
-        />
-        <em class="hint">Київ ≈ {{ hint('submit_window_start') }}</em>
-      </label>
-      <label>
-        <span>Вікно надсилання — кінець</span>
-        <input
-          type="time"
-          name="submit_window_end"
-          [value]="scheduleTime('submit_window_end')"
-          (input)="setSchedule('submit_window_end', $event)"
-        />
-        <em class="hint">Київ ≈ {{ hint('submit_window_end') }}</em>
-      </label>
-      <label>
-        <span>Звід таких рахунків, хв</span>
-        <input
-          type="number"
-          name="reconcile_every_minutes"
-          [value]="scheduleValue('reconcile_every_minutes')"
-          (input)="setSchedule('reconcile_every_minutes', $event)"
-        />
-      </label>
-    </fieldset>
+  <fieldset class="card">
+    <legend>Розклад (час ET)</legend>
+    <label>
+      <span>Аналіз сигналів</span>
+      <input
+        type="time"
+        name="analysis"
+        [value]="scheduleTime('analysis')"
+        (input)="setSchedule('analysis', $event)"
+      />
+      <em class="hint">Київ ≈ {{ hint('analysis') }}</em>
+    </label>
+    <label>
+      <span>Дедлайн схвалення</span>
+      <input
+        type="time"
+        name="approval_deadline"
+        [value]="scheduleTime('approval_deadline')"
+        (input)="setSchedule('approval_deadline', $event)"
+      />
+      <em class="hint">Київ ≈ {{ hint('approval_deadline') }}</em>
+    </label>
+    <label>
+      <span>Вікно надсилання — початок</span>
+      <input
+        type="time"
+        name="submit_window_start"
+        [value]="scheduleTime('submit_window_start')"
+        (input)="setSchedule('submit_window_start', $event)"
+      />
+      <em class="hint">Київ ≈ {{ hint('submit_window_start') }}</em>
+    </label>
+    <label>
+      <span>Вікно надсилання — кінець</span>
+      <input
+        type="time"
+        name="submit_window_end"
+        [value]="scheduleTime('submit_window_end')"
+        (input)="setSchedule('submit_window_end', $event)"
+      />
+      <em class="hint">Київ ≈ {{ hint('submit_window_end') }}</em>
+    </label>
+    <label>
+      <span>Звід таких рахунків, хв</span>
+      <input
+        type="number"
+        name="reconcile_every_minutes"
+        [value]="scheduleValue('reconcile_every_minutes')"
+        (input)="setSchedule('reconcile_every_minutes', $event)"
+      />
+    </label>
+  </fieldset>
 
-    <fieldset class="card">
-      <legend>Фільтри</legend>
-      <label class="check">
-        <input
-          type="checkbox"
-          name="news_enabled"
-          [checked]="cfg.news_filter.enabled"
-          (change)="setNewsBoolean('enabled', $event)"
-        />
-        <span>Перевірка новин (Claude)</span>
-      </label>
-      <label>
-        <span>Модель</span>
-        <input
-          type="text"
-          name="news_model"
-          autocomplete="off"
-          [value]="cfg.news_filter.model"
-          (input)="setNews('model', $event)"
-        />
-      </label>
-      <label>
-        <span>Денний бюджет, $</span>
-        <input
-          type="number"
-          name="news_daily"
-          step="0.1"
-          [value]="cfg.news_filter.daily_budget_usd"
-          (input)="setNewsNumber('daily_budget_usd', $event)"
-        />
-      </label>
-      <label>
-        <span>Місячний бюджет, $</span>
-        <input
-          type="number"
-          name="news_monthly"
-          step="1"
-          [value]="cfg.news_filter.monthly_budget_usd"
-          (input)="setNewsNumber('monthly_budget_usd', $event)"
-        />
-      </label>
-      <label>
-        <span>«Обережно» в авто</span>
-        <select
-          name="news_caution"
-          [value]="cfg.news_filter.caution_in_auto"
-          (change)="setNews('caution_in_auto', $event)"
-        >
-          @for (policy of newsPolicies(); track policy.value) {
-            <option [value]="policy.value">{{ policy.label }}</option>
-          }
-        </select>
-      </label>
-      <label>
-        <span>Новини недоступні</span>
-        <select
-          name="news_unavailable"
-          [value]="cfg.news_filter.on_unavailable"
-          (change)="setNews('on_unavailable', $event)"
-        >
-          @for (policy of newsPolicies(); track policy.value) {
-            <option [value]="policy.value">{{ policy.label }}</option>
-          }
-        </select>
-      </label>
-      <label class="check">
-        <input
-          type="checkbox"
-          name="earnings_enabled"
-          [checked]="cfg.earnings_filter.enabled"
-          (change)="setEarningsBoolean('enabled', $event)"
-        />
-        <span>Фільтр звітів</span>
-      </label>
-      <label>
-        <span>Днів наперед до звіту</span>
-        <input
-          type="number"
-          name="earnings_days"
-          [value]="cfg.earnings_filter.days_ahead"
-          (input)="setEarningsNumber('days_ahead', $event)"
-        />
-      </label>
-      <label>
-        <span>Звіти недоступні</span>
-        <select
-          name="earnings_unavailable"
-          [value]="cfg.earnings_filter.on_unavailable"
-          (change)="setEarningsPolicy($event)"
-        >
-          @for (policy of newsPolicies(); track policy.value) {
-            <option [value]="policy.value">{{ policy.label }}</option>
-          }
-        </select>
-      </label>
-    </fieldset>
+  <fieldset class="card">
+    <legend>Фільтри</legend>
+    <label class="check">
+      <input
+        type="checkbox"
+        name="news_enabled"
+        [checked]="cfg.news_filter.enabled"
+        (change)="setNewsBoolean('enabled', $event)"
+      />
+      <span>Перевірка новин (Claude)</span>
+    </label>
+    <label>
+      <span>Модель</span>
+      <input
+        type="text"
+        name="news_model"
+        autocomplete="off"
+        [value]="cfg.news_filter.model"
+        (input)="setNews('model', $event)"
+      />
+    </label>
+    <label>
+      <span>Денний бюджет, $</span>
+      <input
+        type="number"
+        name="news_daily"
+        step="0.1"
+        [value]="cfg.news_filter.daily_budget_usd"
+        (input)="setNewsNumber('daily_budget_usd', $event)"
+      />
+    </label>
+    <label>
+      <span>Місячний бюджет, $</span>
+      <input
+        type="number"
+        name="news_monthly"
+        step="1"
+        [value]="cfg.news_filter.monthly_budget_usd"
+        (input)="setNewsNumber('monthly_budget_usd', $event)"
+      />
+    </label>
+    <label>
+      <span>«Обережно» в авто</span>
+      <select
+        name="news_caution"
+        [value]="cfg.news_filter.caution_in_auto"
+        (change)="setNews('caution_in_auto', $event)"
+      >
+        @for (policy of newsPolicies(); track policy.value) {
+        <option [value]="policy.value">{{ policy.label }}</option>
+        }
+      </select>
+    </label>
+    <label>
+      <span>Новини недоступні</span>
+      <select
+        name="news_unavailable"
+        [value]="cfg.news_filter.on_unavailable"
+        (change)="setNews('on_unavailable', $event)"
+      >
+        @for (policy of newsPolicies(); track policy.value) {
+        <option [value]="policy.value">{{ policy.label }}</option>
+        }
+      </select>
+    </label>
+    <label class="check">
+      <input
+        type="checkbox"
+        name="earnings_enabled"
+        [checked]="cfg.earnings_filter.enabled"
+        (change)="setEarningsBoolean('enabled', $event)"
+      />
+      <span>Фільтр звітів</span>
+    </label>
+    <label>
+      <span>Днів наперед до звіту</span>
+      <input
+        type="number"
+        name="earnings_days"
+        [value]="cfg.earnings_filter.days_ahead"
+        (input)="setEarningsNumber('days_ahead', $event)"
+      />
+    </label>
+    <label>
+      <span>Звіти недоступні</span>
+      <select
+        name="earnings_unavailable"
+        [value]="cfg.earnings_filter.on_unavailable"
+        (change)="setEarningsPolicy($event)"
+      >
+        @for (policy of newsPolicies(); track policy.value) {
+        <option [value]="policy.value">{{ policy.label }}</option>
+        }
+      </select>
+    </label>
+  </fieldset>
   }
 
   <app-universe-section />

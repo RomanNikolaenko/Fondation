@@ -7,10 +7,22 @@ import type { StrategiesConfig } from '../../core/generated/StrategiesConfig';
 import type { TrendPullbackParams } from '../../core/generated/TrendPullbackParams';
 import type { BreakoutParams } from '../../core/generated/BreakoutParams';
 
-type TpKey = 'sma_long' | 'sma_mid' | 'rsi_period' | 'rsi_entry' | 'atr_period'
-  | 'atr_stop_mult' | 'exit_sma' | 'max_hold_days';
-type BoKey = 'entry_lookback' | 'volume_mult' | 'volume_avg' | 'atr_period'
-  | 'atr_stop_mult' | 'trail_lookback';
+type TpKey =
+  | 'sma_long'
+  | 'sma_mid'
+  | 'rsi_period'
+  | 'rsi_entry'
+  | 'atr_period'
+  | 'atr_stop_mult'
+  | 'exit_sma'
+  | 'max_hold_days';
+type BoKey =
+  | 'entry_lookback'
+  | 'volume_mult'
+  | 'volume_avg'
+  | 'atr_period'
+  | 'atr_stop_mult'
+  | 'trail_lookback';
 
 function inputValue(event: Event): string {
   return (event.target as HTMLInputElement).value;
@@ -85,59 +97,75 @@ export class Strategies implements OnInit {
   // ---------------------------------------------------------- редагування
 
   protected setTpEnabled(event: Event): void {
-    this.strategies.update((s) => this.withGroup(s, (draft) => {
-      const tp = draft.trend_pullback as TrendPullbackParams & { enabled?: boolean };
-      tp.enabled = boolValue(event);
-    }));
+    this.strategies.update((s) =>
+      this.withGroup(s, (draft) => {
+        const tp = draft.trend_pullback as TrendPullbackParams & { enabled?: boolean };
+        tp.enabled = boolValue(event);
+      }),
+    );
   }
 
   protected setTpAlloc(event: Event): void {
     const value = numValue(event) / 100;
-    this.strategies.update((s) => this.withGroup(s, (draft) => {
-      draft.trend_pullback.allocation = value;
-    }));
+    this.strategies.update((s) =>
+      this.withGroup(s, (draft) => {
+        draft.trend_pullback.allocation = value;
+      }),
+    );
   }
 
   protected setTp(key: TpKey, event: Event): void {
     const value = numValue(event);
-    this.strategies.update((s) => this.withGroup(s, (draft) => {
-      (draft.trend_pullback as Record<TpKey, number>)[key] = value;
-    }));
+    this.strategies.update((s) =>
+      this.withGroup(s, (draft) => {
+        (draft.trend_pullback as Record<TpKey, number>)[key] = value;
+      }),
+    );
   }
 
   protected setBoEnabled(event: Event): void {
-    this.strategies.update((s) => this.withGroup(s, (draft) => {
-      const bo = draft.breakout as BreakoutParams & { enabled?: boolean };
-      bo.enabled = boolValue(event);
-    }));
+    this.strategies.update((s) =>
+      this.withGroup(s, (draft) => {
+        const bo = draft.breakout as BreakoutParams & { enabled?: boolean };
+        bo.enabled = boolValue(event);
+      }),
+    );
   }
 
   protected setBoAlloc(event: Event): void {
     const value = numValue(event) / 100;
-    this.strategies.update((s) => this.withGroup(s, (draft) => {
-      (draft.breakout as Record<'allocation', number>)['allocation'] = value;
-    }));
+    this.strategies.update((s) =>
+      this.withGroup(s, (draft) => {
+        (draft.breakout as Record<'allocation', number>)['allocation'] = value;
+      }),
+    );
   }
 
   protected setBo(key: BoKey, event: Event): void {
     const value = numValue(event);
-    this.strategies.update((s) => this.withGroup(s, (draft) => {
-      (draft.breakout as Record<BoKey, number>)[key] = value;
-    }));
+    this.strategies.update((s) =>
+      this.withGroup(s, (draft) => {
+        (draft.breakout as Record<BoKey, number>)[key] = value;
+      }),
+    );
   }
 
   protected setMarketSymbol(event: Event): void {
     const value = inputValue(event).trim().toUpperCase();
-    this.strategies.update((s) => this.withGroup(s, (draft) => {
-      draft.market_filter.symbol = value;
-    }));
+    this.strategies.update((s) =>
+      this.withGroup(s, (draft) => {
+        draft.market_filter.symbol = value;
+      }),
+    );
   }
 
   protected setMarketSma(event: Event): void {
     const value = numValue(event);
-    this.strategies.update((s) => this.withGroup(s, (draft) => {
-      draft.market_filter.sma = value;
-    }));
+    this.strategies.update((s) =>
+      this.withGroup(s, (draft) => {
+        draft.market_filter.sma = value;
+      }),
+    );
   }
 
   private withGroup(
@@ -181,6 +209,6 @@ export class Strategies implements OnInit {
   }
 
   protected allocPct(value: number | undefined): number {
-    return ((value ?? 0) * 100);
+    return (value ?? 0) * 100;
   }
 }

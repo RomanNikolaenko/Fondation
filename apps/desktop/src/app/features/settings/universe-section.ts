@@ -16,9 +16,7 @@ import type { UniverseEntryDto } from '../../core/generated/UniverseEntryDto';
         <p class="error" role="alert">{{ message }}</p>
       }
       @if (importResult(); as result) {
-        <p class="muted">
-          Імпорт: додано {{ result.added }} · пропущено {{ result.skipped }}
-        </p>
+        <p class="muted">Імпорт: додано {{ result.added }} · пропущено {{ result.skipped }}</p>
       }
       <div class="add">
         <input

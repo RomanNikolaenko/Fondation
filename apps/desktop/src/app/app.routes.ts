@@ -2,8 +2,7 @@ import { Routes } from '@angular/router';
 
 import { disclaimerGuard } from './core/disclaimer.guard';
 
-const overview = () =>
-  import('./features/overview/overview').then((m) => m.Overview);
+const overview = () => import('./features/overview/overview').then((m) => m.Overview);
 
 export const routes: Routes = [
   {
@@ -39,13 +38,11 @@ export const routes: Routes = [
       },
       {
         path: 'strategies',
-        loadComponent: () =>
-          import('./features/strategies/strategies').then((m) => m.Strategies),
+        loadComponent: () => import('./features/strategies/strategies').then((m) => m.Strategies),
       },
       {
         path: 'settings',
-        loadComponent: () =>
-          import('./features/settings/settings').then((m) => m.Settings),
+        loadComponent: () => import('./features/settings/settings').then((m) => m.Settings),
       },
     ],
   },
