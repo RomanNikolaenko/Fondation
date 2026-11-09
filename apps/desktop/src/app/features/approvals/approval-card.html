@@ -1,0 +1,92 @@
+<article class="approval">
+  <header class="head">
+    <div class="title">
+      <h2>{{ intent().symbol }}</h2>
+      <span class="strategy">{{ intent().strategy }}</span>
+      <span class="kind">{{ kindLabel() }}</span>
+      @if (verdictLabel(); as label) {
+        <span class="badge" [class]="'badge badge--' + verdict()">{{ label }}</span>
+      }
+    </div>
+    <span class="session">сесія {{ intent().session_date }}</span>
+  </header>
+
+  @if (chartBars().length > 0) {
+    <fond-candle-chart [bars]="chartBars()" [height]="140" />
+  }
+
+  <p class="explanation">{{ intent().explanation }}</p>
+
+  @if (news(); as n) {
+    @if (n.reasons.length > 0) {
+      <ul class="list">
+        @for (reason of n.reasons; track reason) {
+          <li>{{ reason }}</li>
+        }
+      </ul>
+    }
+    @if (n.key_events.length > 0) {
+      <ul class="list">
+        @for (event of n.key_events; track event) {
+          <li class="muted">{{ event }}</li>
+        }
+      </ul>
+    }
+  }
+
+  <dl class="details">
+    @if (entry(); as e) {
+      <div>
+        <dt>Кількість</dt>
+        <dd>{{ e.qty }}</dd>
+      </div>
+      <div>
+        <dt>Ліміт</dt>
+        <dd>{{ e.limit_price }}</dd>
+      </div>
+      <div>
+        <dt>Стоп</dt>
+        <dd>{{ e.stop_price }}</dd>
+      </div>
+      @if (e.take_profit; as tp) {
+        <div>
+          <dt>Ціль</dt>
+          <dd>{{ tp }}</dd>
+        </div>
+      }
+      <div>
+        <dt>Ризик</dt>
+        <dd>${{ e.risk_usd.toFixed(2) }}@if (riskPct(); as pct) {
+          <span> · {{ pct }} капіталу</span>
+        }</dd>
+      </div>
+    }
+    @if (deadlineText(); as deadline) {
+      <div>
+        <dt>Дедлайн</dt>
+        <dd>{{ deadline }}</dd>
+      </div>
+    }
+  </dl>
+
+  <footer class="buttons">
+    <button
+      type="button"
+      class="primary"
+      [disabled]="busy()"
+      data-action="approve"
+      (click)="doApprove()"
+    >
+      Виконати
+    </button>
+    <button
+      type="button"
+      class="secondary"
+      [disabled]="busy()"
+      data-action="reject"
+      (click)="doReject()"
+    >
+      Відхилити
+    </button>
+  </footer>
+</article>

@@ -22,13 +22,11 @@ export const routes: Routes = [
       { path: '', pathMatch: 'full', loadComponent: overview },
       {
         path: 'approvals',
-        loadComponent: placeholder,
-        data: { title: UK.nav.approvals },
+        loadComponent: () => import('./features/approvals/approvals').then((m) => m.Approvals),
       },
       {
         path: 'positions',
-        loadComponent: placeholder,
-        data: { title: UK.nav.positions },
+        loadComponent: () => import('./features/positions/positions').then((m) => m.Positions),
       },
       {
         path: 'signals',

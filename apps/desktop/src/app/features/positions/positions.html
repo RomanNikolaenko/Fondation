@@ -1,0 +1,95 @@
+<section class="positions">
+  <h1>Позиції</h1>
+
+  @if (error()) {
+    <p class="error" role="alert">{{ error() }}</p>
+  }
+
+  @if (loading()) {
+    <p class="muted">Завантаження…</p>
+  } @else {
+    @if (positions().length === 0) {
+      <p class="muted">Позицій немає.</p>
+    } @else {
+      <table>
+        <thead>
+          <tr>
+            <th>Символ</th>
+            <th>К-ть</th>
+            <th>Вхід</th>
+            <th>Поточна</th>
+            <th>Стоп</th>
+            <th>Ціль</th>
+            <th>Вартість</th>
+            <th>P&amp;L</th>
+            <th>Стратегія</th>
+            <th>Сектор</th>
+            <th>Дії</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (position of positions(); track position.symbol) {
+            <tr>
+              <td>
+                <a [routerLink]="['/chart']" [queryParams]="{ symbol: position.symbol }">{{
+                  position.symbol
+                }}</a>
+              </td>
+              <td>{{ position.qty }}</td>
+              <td>{{ position.entry_price | money }}</td>
+              <td>{{ position.current_price | money }}</td>
+              <td>{{ position.stop_price | money }}</td>
+              <td>{{ position.take_profit | money }}</td>
+              <td>{{ positionValue(position) | money }}</td>
+              <td [class.loss]="position.unrealized_pnl.startsWith('-')">
+                {{ position.unrealized_pnl | money }}
+              </td>
+              <td>{{ position.strategy }}</td>
+              <td>{{ position.sector }}</td>
+              <td>
+                <button
+                  type="button"
+                  class="secondary"
+                  [disabled]="closing() !== null"
+                  (click)="close(position)"
+                >
+                  Закрити
+                </button>
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    }
+
+    <h2>Відкриті ордери</h2>
+    @if (openOrders().length === 0) {
+      <p class="muted">Відкритих ордерів немає.</p>
+    } @else {
+      <table>
+        <thead>
+          <tr>
+            <th>Символ</th>
+            <th>Бік</th>
+            <th>Тип</th>
+            <th>К-ть</th>
+            <th>Виконано</th>
+            <th>Статус</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (order of openOrders(); track order.id) {
+            <tr>
+              <td>{{ order.symbol }}</td>
+              <td>{{ order.side === 'buy' ? 'купівля' : 'продаж' }}</td>
+              <td>{{ order.order_type }}</td>
+              <td>{{ order.qty }}</td>
+              <td>{{ order.filled_qty }}</td>
+              <td>{{ order.status }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    }
+  }
+</section>

@@ -1,0 +1,25 @@
+<section class="approvals">
+  <h1>Схвалення</h1>
+
+  @if (error()) {
+    <p class="error" role="alert">{{ error() }}</p>
+  }
+
+  @if (loading()) {
+    <p class="muted">Завантаження…</p>
+  } @else if (intents().length === 0) {
+    <p class="empty">Немає угод на схвалення</p>
+  } @else {
+    <div class="list">
+      @for (intent of intents(); track intent.id) {
+        <app-approval-card
+          [intent]="intent"
+          [equity]="equity()"
+          [deadline]="deadlineAt(intent)"
+          (approve)="onApprove($event)"
+          (reject)="onReject($event)"
+        />
+      }
+    </div>
+  }
+</section>
