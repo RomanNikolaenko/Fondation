@@ -1,5 +1,6 @@
 //! Доменні типи, трейти, індикатори, ризик-правила, розмір позиції. Без I/O.
 
+pub mod ai;
 pub mod calendar;
 pub mod error;
 pub mod filters;
