@@ -1,5 +1,6 @@
 //! SQLite (`sqlx`), міграції, репозиторії.
 
+mod ai;
 mod backtests;
 mod bars;
 mod cycle;
@@ -17,6 +18,7 @@ use fond_core::intent::IntentStatus;
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 
+pub use ai::{AiProposalRecord, AiProposalStatus, NewAiProposal};
 pub use backtests::{BacktestRow, BacktestStatus};
 pub use cycle::{StepName, StepStatus};
 pub use events::{EventKind, EventQuery, NewEvent, StoredEvent};
