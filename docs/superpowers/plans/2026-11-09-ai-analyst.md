@@ -26,17 +26,13 @@
 
 ## Крок 4. Джоб `ai_review` у `fond-engine`
 
-- [ ] Конфіг: розклад (ET) + `max_ai_proposals` (устав 5) + `ai_context_bars`
-- [ ] Контекст-білдер: бари й скан з `refresh_market_data` (краще повне покриття
-      купить лише в Scanned-сеті)
-- [ ] Виклик стратегіста у один потік;富贵 бюджету з `llm_spend_between` — та самі
-      механізми, що й для news-фільтра
-- [ ] Запис пропозицій → risk::evaluate → Intent → схвалення/авто → submit;
-      пропускаемо новинний фільтр для `strategy = "ai"`
-- [ ] Події: `ai.review.started/completed/proposal/rejected` (ws + events)
-- [ ] Тести: mock-стю сервер; бюджет вичпаний; без ключа — event «disabled»;
-      верифь-чіки відкидають кривий стоп; схвалення інлайн
-- [ ] Коміт: `feat(engine): ai analyst job`
+- [x] Конфіг: `AiReviewConfig` (enabled, model, effort, context_bars, max_proposals, allocation, lookback_days) + валідація
+- [x] Контекст-білдер: бари й скан з того самого вечірнього аналізу (AI викликається в кінці Run::execute)
+- [x] Виклик стратегіста послідовно; бюджет спільний з news-фільтром (`budget_left`)
+- [x] Запис пропозицій → risk::evaluate → Intent → схвалення/авто; фільтри звітів/новин для AI пропущені
+- [x] Події в журнал (journal + ws): пропозиція / санітарне відхилення / помилка стратегіста / пропуск бюджету
+- [x] Тести (5): пропозиція → намір+запис IntentCreated+llm_usage; вичерпаний бюджет; кривий стоп; помилка стратегіста; контекст
+- [x] Коміт: `feat(engine): ai analyst pass in analysis, budget-guarded, proposal journal`
 
 ## Крок 5. REST/DTO у `fond-api`
 
