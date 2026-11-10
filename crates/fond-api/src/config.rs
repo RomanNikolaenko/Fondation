@@ -121,6 +121,36 @@ impl Default for NewsFilterConfig {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(default)]
+pub struct AiReviewConfig {
+    pub enabled: bool,
+    pub model: String,
+    pub effort: String,
+    /// Скільки останніх барів передавати моделі.
+    pub context_bars: usize,
+    /// Максимум пропозицій (символів) за один прогін.
+    pub max_proposals: usize,
+    /// Ліміт пропозицій, що можуть завершитися намірами за один прогін.
+    pub lookback_days: u32,
+    /// Максимальна частка вартості позицій стратегії `ai` від капіталу.
+    pub allocation: f64,
+}
+
+impl Default for AiReviewConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: "claude-haiku-5-5".into(),
+            effort: "low".into(),
+            context_bars: 90,
+            max_proposals: 5,
+            lookback_days: 7,
+            allocation: 0.25,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(default)]
 pub struct EarningsFilterConfig {
     pub enabled: bool,
     pub days_ahead: usize,
@@ -166,6 +196,7 @@ pub struct EngineConfig {
     pub risk: RiskConfig,
     pub strategies: StrategiesConfig,
     pub news_filter: NewsFilterConfig,
+    pub ai: AiReviewConfig,
     pub earnings_filter: EarningsFilterConfig,
     pub backtest: CostModel,
     pub ui: UiConfig,
@@ -182,6 +213,7 @@ impl Default for EngineConfig {
             risk: RiskConfig::default(),
             strategies: StrategiesConfig::default(),
             news_filter: NewsFilterConfig::default(),
+            ai: AiReviewConfig::default(),
             earnings_filter: EarningsFilterConfig::default(),
             backtest: CostModel::default(),
             ui: UiConfig::default(),
@@ -260,6 +292,41 @@ impl EngineConfig {
             errs.push(format!(
                 "news_filter.effort має бути low, medium або high, зараз \"{}\"",
                 n.effort
+            ));
+        }
+
+        let a = &self.ai;
+        if a.model.trim().is_empty() {
+            errs.push("ai.model не може бути порожнім".into());
+        }
+        if !matches!(a.effort.as_str(), "low" | "medium" | "high") {
+            errs.push(format!(
+                "ai.effort має бути low, medium або high, зараз \"{}\"",
+                a.effort
+            ));
+        }
+        if !(20..=250).contains(&a.context_bars) {
+            errs.push(format!(
+                "ai.context_bars має бути в межах 20..=250, зараз {}",
+                a.context_bars
+            ));
+        }
+        if !(1..=20).contains(&a.max_proposals) {
+            errs.push(format!(
+                "ai.max_proposals має бути в межах 1..=20, зараз {}",
+                a.max_proposals
+            ));
+        }
+        if a.lookback_days < 1 || a.lookback_days > 30 {
+            errs.push(format!(
+                "ai.lookback_days має бути в межах 1..=30, зараз {}",
+                a.lookback_days
+            ));
+        }
+        if !in_unit(a.allocation) {
+            errs.push(format!(
+                "ai.allocation має бути в межах (0, 1], зараз {}",
+                a.allocation
             ));
         }
 

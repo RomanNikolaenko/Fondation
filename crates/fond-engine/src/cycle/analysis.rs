@@ -108,19 +108,19 @@ pub(crate) fn scan_reject_text(r: &ScanReject) -> String {
 }
 
 /// Результат скану: бари тікерів universe і ті, що пройшли.
-struct Scanned {
-    bars: HashMap<Symbol, Vec<Bar>>,
-    passed: Vec<Symbol>,
-    total: usize,
+pub(crate) struct Scanned {
+    pub(crate) bars: HashMap<Symbol, Vec<Bar>>,
+    pub(crate) passed: Vec<Symbol>,
+    pub(crate) total: usize,
 }
 
 /// Спільний контекст одного прогону аналізу.
-struct Run<'a> {
-    d: &'a Deps,
-    cfg: &'a EngineConfig,
-    date: NaiveDate,
-    session: NaiveDate,
-    from: NaiveDate,
+pub(crate) struct Run<'a> {
+    pub(crate) d: &'a Deps,
+    pub(crate) cfg: &'a EngineConfig,
+    pub(crate) date: NaiveDate,
+    pub(crate) session: NaiveDate,
+    pub(crate) from: NaiveDate,
 }
 
 /// Крок аналізу за день `date` (D): наміри створюються на наступну сесію.
@@ -140,6 +140,11 @@ pub async fn run_analysis(
         from: window_start(cfg, date),
     };
     run.execute(&cal).await
+}
+
+/// Стратегія джерела AI-пропозицій (спільний StrategyId між циклом і сховищем).
+pub fn strategic_ai_id() -> StrategyId {
+    StrategyId::new(super::ai::AI_STRATEGY)
 }
 
 impl Run<'_> {
@@ -197,6 +202,8 @@ impl Run<'_> {
             }
         }
         summary.candidates = candidates.len();
+        // Для AI-проходу (основний потік нижче споживає `candidates`).
+        let ai_candidates: Vec<&Symbol> = candidates.clone();
 
         let mut signals = Vec::new();
         for sym in candidates {
@@ -212,12 +219,29 @@ impl Run<'_> {
         }
         let signals = pick_best_per_symbol(signals);
         summary.signals = signals.len();
+        // AI не додає пропозицій для тікерів, де вже є технічний сигнал:
+        // ризик-менеджер такі дублікати відкидає, а клік LLM — зайвим.
+        let technical_symbols: HashSet<&Symbol> = signals.iter().map(|s| &s.symbol).collect();
+        let ai_candidates: Vec<&Symbol> = ai_candidates
+            .into_iter()
+            .filter(|s| !technical_symbols.contains(*s))
+            .collect();
 
         // Завжди: порушення тижневого ліміту ставить паузу навіть без сигналів.
         let blocked = entries_block_reason(d, cfg, self.date).await?;
-        let entries = self
+        let mut entries = self
             .entries(cal, &names, signals, blocked.is_none())
             .await?;
+        // AI-аналітик додає свої пропозиції після технічних сигналів (та самий
+        // ризик-конвеєр; фільтри звітів/новин для AI не запускаються).
+        let (ai_added, ai_ids) = if cfg.ai.enabled {
+            let r = self.ai_pass(&scan, &ai_candidates, &names).await?;
+            (r.candidates, r.ids)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        let ai_symbols: Vec<Symbol> = ai_added.iter().map(|c| c.signal.symbol.clone()).collect();
+        entries.candidates.extend(ai_added);
 
         // Заплановані входи рахуються як позиції (вартість qty × ліміт) і витрачають кошти,
         // так само як прийняті в цьому раунді кандидати.
@@ -250,13 +274,16 @@ impl Run<'_> {
                 ),
             })
             .count();
+        let mut allocs = allocations(&cfg.strategies);
+        // Стратегія `ai` може додавати наміри і має власну частку від капіталу.
+        allocs.insert(strategic_ai_id(), cfg.ai.allocation);
         let snapshot = PortfolioSnapshot {
             equity,
             cash,
             positions: held,
             orders_planned: u32::try_from(orders_planned).unwrap_or(u32::MAX),
             entries_blocked: blocked,
-            allocations: allocations(&cfg.strategies),
+            allocations: allocs,
         };
         let (created, pending) = self
             .persist_decisions(
@@ -264,6 +291,9 @@ impl Run<'_> {
                 entries.news,
             )
             .await?;
+        // Підсумки AI-пропозицій у журналі ai_proposals.
+        let ai_pairs: Vec<(&i64, &Symbol)> = ai_ids.iter().zip(ai_symbols.iter()).collect();
+        self.ai_finalize(&ai_pairs).await?;
         summary.entries_created = created;
         if pending > 0 {
             d.bus.publish(EngineEventDto::IntentsPending {
@@ -795,9 +825,9 @@ impl Run<'_> {
 }
 
 /// Кандидати після фільтрів і вердикти новин для них.
-struct Entries {
-    candidates: Vec<Candidate>,
-    news: HashMap<Symbol, Option<NewsVerdict>>,
+pub(crate) struct Entries {
+    pub(crate) candidates: Vec<Candidate>,
+    pub(crate) news: HashMap<Symbol, Option<NewsVerdict>>,
 }
 
 /// Текст і дані події журналу.

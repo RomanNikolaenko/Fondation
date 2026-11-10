@@ -12,8 +12,8 @@ use fond_core::intent::{Intent, IntentKind, IntentStatus};
 use fond_core::orders::{BrokerOrder, OrderClass, OrderRequest, OrderType, Side, TimeInForce};
 use fond_core::portfolio::{Position, TrackedPosition};
 use fond_core::testkit::{
-    FakeBroker, FakeClock, FakeEarnings, FakeJudge, FakeMarketData, FakeNews, bars_from_closes,
-    uptrend_then_pullback,
+    FakeBroker, FakeClock, FakeEarnings, FakeJudge, FakeMarketData, FakeNews, FakeStrategist,
+    bars_from_closes, uptrend_then_pullback,
 };
 use fond_core::traits::{AssetInfo, NewsJudgment, NewsVerdict, Session, Verdict};
 use fond_core::types::{Bar, StrategyId, Symbol};
@@ -305,6 +305,7 @@ pub(crate) struct Handles {
     pub news: Arc<FakeNews>,
     pub earnings: Arc<FakeEarnings>,
     pub judge: Arc<FakeJudge>,
+    pub strategist: Arc<FakeStrategist>,
     pub clock: Arc<FakeClock>,
     start: NaiveDate,
     last: NaiveDate,
@@ -369,6 +370,8 @@ pub(crate) async fn fixture() -> (Deps, Handles) {
     let news = Arc::new(FakeNews::default());
     let earnings = Arc::new(FakeEarnings::default());
     let judge = Arc::new(FakeJudge::new(Ok(judgment(Verdict::Allow, &[]))));
+    // Стратегіст за замовчуванням без відповідей (AI вимкнено у конфігах тестів).
+    let strategist = Arc::new(FakeStrategist::new(Vec::new()));
 
     let deps = Deps {
         broker: broker.clone(),
@@ -376,6 +379,7 @@ pub(crate) async fn fixture() -> (Deps, Handles) {
         news: news.clone(),
         earnings: earnings.clone(),
         judge: judge.clone(),
+        strategist: strategist.clone(),
         industry: Arc::new(FakeIndustry),
         store,
         clock: clock.clone(),
@@ -388,6 +392,7 @@ pub(crate) async fn fixture() -> (Deps, Handles) {
         news,
         earnings,
         judge,
+        strategist,
         clock,
         start,
         last,

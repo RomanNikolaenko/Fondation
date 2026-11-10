@@ -11,8 +11,8 @@ use crate::error::{BrokerError, DataError, JudgeError};
 use crate::orders::{BrokerOrder, OrderClass, OrderRequest, OrderStatus, OrderType, Side};
 use crate::portfolio::{Account, BrokerPosition};
 use crate::traits::{
-    AssetInfo, Broker, Clock, EarningsCalendar, MarketData, NewsItem, NewsJudge, NewsJudgeRequest,
-    NewsJudgment, NewsSource, Session,
+    AiReview, AiStrategist, AiTickerContext, AssetInfo, Broker, Clock, EarningsCalendar,
+    MarketData, NewsItem, NewsJudge, NewsJudgeRequest, NewsJudgment, NewsSource, Session,
 };
 use crate::types::{Bar, Symbol};
 
@@ -693,6 +693,62 @@ impl NewsJudge for FakeJudge {
         let mut st = self.state.lock().unwrap();
         st.calls += 1;
         st.result.clone()
+    }
+}
+
+// ---------------------------------------------------------- FakeStrategist
+
+/// Відповіді віддає по черзі; остання в черзі — для всіх наступних викликів.
+/// Усі контексти, які двигун передав стратегісту, зберігаються для перевірок.
+struct StrategistState {
+    results: Vec<Result<AiReview, JudgeError>>,
+    calls: usize,
+    contexts: Vec<AiTickerContext>,
+}
+
+pub struct FakeStrategist {
+    state: Mutex<StrategistState>,
+}
+
+impl FakeStrategist {
+    pub fn new(results: Vec<Result<AiReview, JudgeError>>) -> Self {
+        Self {
+            state: Mutex::new(StrategistState {
+                results,
+                calls: 0,
+                contexts: Vec::new(),
+            }),
+        }
+    }
+
+    pub fn calls(&self) -> usize {
+        self.state.lock().unwrap().calls
+    }
+
+    pub fn contexts(&self) -> Vec<AiTickerContext> {
+        self.state.lock().unwrap().contexts.clone()
+    }
+
+    /// Перезадає відповіді; нумерує виклики заново.
+    pub fn set_results(&self, results: Vec<Result<AiReview, JudgeError>>) {
+        let mut st = self.state.lock().unwrap();
+        st.results = results;
+        st.calls = 0;
+        st.contexts.clear();
+    }
+}
+
+#[async_trait]
+impl AiStrategist for FakeStrategist {
+    async fn analyze(&self, ctx: &AiTickerContext) -> Result<AiReview, JudgeError> {
+        let mut st = self.state.lock().unwrap();
+        st.calls += 1;
+        st.contexts.push(ctx.clone());
+        if st.results.is_empty() {
+            return Err(JudgeError::Other("немає заготованого результату".into()));
+        }
+        let idx = st.calls.min(st.results.len()) - 1;
+        st.results[idx].clone()
     }
 }
 

@@ -1,5 +1,8 @@
 //! Кроки щоденного циклу та спільні допоміжні функції: журнал, календар, блокування входів.
 
+pub mod ai;
+#[cfg(test)]
+pub(crate) mod ai_tests;
 pub mod analysis;
 pub mod filters;
 pub mod kill;

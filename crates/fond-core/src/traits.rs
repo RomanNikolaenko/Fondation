@@ -175,7 +175,8 @@ pub struct AiPositionBrief {
 }
 
 /// Результат одного виклику AI-стратегіста: 0..1 пропозицій та витрати.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct AiReview {
     pub proposals: Vec<AiProposal>,
     pub model: String,

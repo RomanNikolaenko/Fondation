@@ -141,7 +141,11 @@ fn apply_verdict(cfg: &EngineConfig, v: NewsVerdict) -> FilterOutcome {
 }
 
 /// Чи лишився бюджет LLM на поточний день і місяць (за ET).
-async fn budget_left(d: &Deps, cfg: &EngineConfig, now: DateTime<Utc>) -> Result<bool, StoreError> {
+pub(crate) async fn budget_left(
+    d: &Deps,
+    cfg: &EngineConfig,
+    now: DateTime<Utc>,
+) -> Result<bool, StoreError> {
     let nc = &cfg.news_filter;
     let (day_start, month_start) = budget_windows(now);
     let today = utc_to_et(now).date_naive();

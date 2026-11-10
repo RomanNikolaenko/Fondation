@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use chrono::NaiveDate;
 use fond_adapters::alpaca::{AlpacaClient, AlpacaConfig};
 use fond_adapters::claude::{ClaudeConfig, ClaudeJudge};
+use fond_adapters::claude_strategist::ClaudeStrategist;
 use fond_adapters::finnhub::FinnhubClient;
 use fond_adapters::http::Secret;
 use fond_adapters::secrets::SecretStore;
@@ -15,8 +16,8 @@ use fond_api::dto::{CheckDto, VerifyResultDto};
 use fond_core::error::{BrokerError, DataError, JudgeError};
 use fond_core::keys::SecretKey;
 use fond_core::traits::{
-    Broker, Clock, EarningsCalendar, MarketData, NewsJudge, NewsJudgeRequest, NewsJudgment,
-    NewsSource,
+    AiStrategist, AiTickerContext, Broker, Clock, EarningsCalendar, MarketData, NewsJudge,
+    NewsJudgeRequest, NewsJudgment, NewsSource,
 };
 use fond_core::types::Symbol;
 use fond_store::Store;
@@ -38,6 +39,7 @@ pub struct Deps {
     pub news: Arc<dyn NewsSource>,
     pub earnings: Arc<dyn EarningsCalendar>,
     pub judge: Arc<dyn NewsJudge>,
+    pub strategist: Arc<dyn AiStrategist>,
     pub industry: Arc<dyn IndustryLookup>,
     pub store: Store,
     pub clock: Arc<dyn Clock>,
@@ -117,7 +119,7 @@ impl DepsFactory for LiveDepsFactory {
         let secret = self.secret(SecretKey::AlpacaSecret, true, &mut missing)?;
         let anthropic = self.secret(
             SecretKey::AnthropicApiKey,
-            cfg.news_filter.enabled,
+            cfg.news_filter.enabled || cfg.ai.enabled,
             &mut missing,
         )?;
         let finnhub = self.secret(
@@ -142,13 +144,22 @@ impl DepsFactory for LiveDepsFactory {
                 None => (Arc::new(EarningsOff), Arc::new(EarningsOff)),
             };
         let judge: Arc<dyn NewsJudge> = match anthropic {
-            Some(api_key) => Arc::new(ClaudeJudge::new(ClaudeConfig {
+            Some(ref api_key) => Arc::new(ClaudeJudge::new(ClaudeConfig {
                 base: static_url(ANTHROPIC_BASE),
-                api_key,
+                api_key: api_key.clone(),
                 model: cfg.news_filter.model.clone(),
                 effort: cfg.news_filter.effort.clone(),
             })),
             None => Arc::new(NewsOff),
+        };
+        let strategist: Arc<dyn AiStrategist> = match anthropic {
+            Some(api_key) => Arc::new(ClaudeStrategist::new(ClaudeConfig {
+                base: static_url(ANTHROPIC_BASE),
+                api_key,
+                model: cfg.ai.model.clone(),
+                effort: cfg.ai.effort.clone(),
+            })),
+            None => Arc::new(StrategistOff),
         };
         Ok(Deps {
             broker: alpaca.clone(),
@@ -156,6 +167,7 @@ impl DepsFactory for LiveDepsFactory {
             news: alpaca,
             earnings,
             judge,
+            strategist,
             industry,
             store: self.store.clone(),
             clock: self.clock.clone(),
@@ -203,6 +215,19 @@ struct NewsOff;
 impl NewsJudge for NewsOff {
     async fn judge(&self, _req: &NewsJudgeRequest) -> Result<NewsJudgment, JudgeError> {
         Err(JudgeError::Other("фільтр новин вимкнено".into()))
+    }
+}
+
+/// Заглушка стратегіста, коли AI-аналітик вимкнено (джоб її не викликає).
+struct StrategistOff;
+
+#[async_trait]
+impl AiStrategist for StrategistOff {
+    async fn analyze(
+        &self,
+        _ctx: &AiTickerContext,
+    ) -> Result<fond_core::traits::AiReview, JudgeError> {
+        Err(JudgeError::Other("AI-аналітик вимкнено".into()))
     }
 }
 
