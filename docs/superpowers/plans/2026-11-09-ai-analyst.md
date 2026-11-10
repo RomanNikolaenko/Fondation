@@ -6,26 +6,23 @@
 
 ## Крок 1. Типи пропозиції у `fond-core`
 
-- [ ] `AiAction { Buy, Exit }`, `AiProposal` у `fond-core/src/ai.rs`; `#[cfg_attr(feature = "ts", derive(ts_rs::TS))]`
-- [ ] Тест: серіалізація тегів (`snake_case`), валідність `strength` 0..1
-- [ ] Коміт: `feat(core): ai proposal types`
+- [x] `AiAction { Buy, Exit }`, `AiProposal` у `fond-core/src/ai.rs`; `#[cfg_attr(feature = "ts", derive(ts_rs::TS))]`
+- [x] Тест: серіалізація тегів (`snake_case`), валідність `strength` 0..1
+- [x] Коміт: `feat(core): ai proposal types`
 
 ## Крок 2. Адаптер `claude_strategist` у `fond-adapters`
 
-- [ ] `AiStrategist`-клієнт на базі `claude.rs`: системний промпт, defang `<context>`,
+- [x] `AiStrategist`-клієнт на базі `claude.rs`: системний промпт, defang `<context>`,
       JSON-схема відповіді, парсинг `AiProposal[]`, rate-limit, retry
-- [ ] Парс моментів: дії не в юніверсі/кривий стоп → далай помилку parsing у сторінки;
-      верифікація в engine (не adapters)
-- [ ] Тести wiremock: ok-відповідь, невалідний JSON, 429/5xx, таймаут
-- [ ] Коміт: `feat(adapters): claude ai strategist`
+- [x] Тести wiremock: ok-відповідь, невалідний JSON, 429/5xx, таймаут
+- [x] Коміт: `feat(adapters): claude ai strategist`
 
 ## Крок 3. Сховище пропозицій у `fond-store`
 
-- [ ] Міграція: `ai_proposals (id, at, symbol, action, payload json, status,
-      confidence, explanation, budget_usd)`
-- [ ] Репозиторій: insert, list за період, update статусу
-- [ ] Тест: тік-тако insert/list
-- [ ] Коміт: `feat(store): ai proposals table`
+- [x] Міграція: `ai_proposals`
+- [x] Репозиторій: insert, list за період, update статусу
+- [x] Тест: insert/list-раундтрип, статуси, сортування
+- [x] Коміт: `feat(store): ai proposals table`
 
 ## Крок 4. Джоб `ai_review` у `fond-engine`
 
