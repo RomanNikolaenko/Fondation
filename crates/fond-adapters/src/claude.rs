@@ -16,7 +16,7 @@ use crate::http::{
     RateLimiter, RawError, RetryPolicy, Secret, http_client, join_url, send, with_retry,
 };
 
-const ANTHROPIC_VERSION: &str = "2026-10-21";
+pub(crate) const ANTHROPIC_VERSION: &str = "2026-10-21";
 const MAX_TOKENS: u64 = 4096;
 const NO_NEWS: &str = "(no news in the last 7 days)";
 
@@ -119,7 +119,7 @@ pub fn parse_response(body: &Value) -> Result<(NewsVerdict, u64, u64), JudgeErro
     Ok((verdict, usage("input_tokens"), usage("output_tokens")))
 }
 
-fn api_message(text: &str) -> String {
+pub(crate) fn api_message(text: &str) -> String {
     serde_json::from_str::<Value>(text)
         .ok()
         .and_then(|v| {
@@ -131,7 +131,7 @@ fn api_message(text: &str) -> String {
         .unwrap_or_else(|| text.to_string())
 }
 
-fn map_error(e: RawError) -> JudgeError {
+pub(crate) fn map_raw_error(e: RawError) -> JudgeError {
     match e {
         RawError::Network(m) => JudgeError::Transient(m),
         RawError::Status(s, text) => {
@@ -188,7 +188,7 @@ impl ClaudeJudge {
         with_retry(&self.retry, || async {
             self.exec(Method::GET, url.clone(), None)
                 .await
-                .map_err(map_error)
+                .map_err(map_raw_error)
         })
         .await
         .map(|_| ())
@@ -211,7 +211,7 @@ impl NewsJudge for ClaudeJudge {
         let text = with_retry(&self.retry, || async {
             self.exec(Method::POST, url.clone(), Some(&body))
                 .await
-                .map_err(map_error)
+                .map_err(map_raw_error)
         })
         .await?;
         let v: Value = serde_json::from_str(&text)

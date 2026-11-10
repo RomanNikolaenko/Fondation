@@ -7,6 +7,7 @@ use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
+use crate::ai::AiProposal;
 use crate::error::{BrokerError, DataError, JudgeError};
 use crate::orders::{BrokerOrder, OrderRequest};
 use crate::portfolio::{Account, BrokerPosition, Position};
@@ -146,6 +147,49 @@ pub trait NewsJudge: Send + Sync {
     async fn judge(&self, req: &NewsJudgeRequest) -> Result<NewsJudgment, JudgeError>;
 }
 
+/// Контекст одного тікера для AI-стратегіста: бари до дня аналізу включно,
+/// зведення індикаторів, новини, поточна позиція. Немає доступу до майбутнього.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct AiTickerContext {
+    pub symbol: Symbol,
+    pub company: String,
+    /// Останні N барів, у хронологічному порядку.
+    pub bars: Vec<Bar>,
+    /// Готовий людський текст: індикатори, тренд, обсяги.
+    pub indicator_summary: String,
+    /// Якщо позиція відкрита — її зведення (для пропозиції Exit).
+    pub position: Option<AiPositionBrief>,
+    /// Найближча дата звіту, якщо відома в календарі.
+    pub next_earnings: Option<NaiveDate>,
+    pub news: Vec<NewsItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct AiPositionBrief {
+    pub qty: f64,
+    pub avg_cost: f64,
+    pub stop_price: Option<f64>,
+    pub take_profit: Option<f64>,
+}
+
+/// Результат одного виклику AI-стратегіста: 0..1 пропозицій та витрати.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AiReview {
+    pub proposals: Vec<AiProposal>,
+    pub model: String,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub input_tokens: u64,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub output_tokens: u64,
+}
+
+#[async_trait]
+pub trait AiStrategist: Send + Sync {
+    async fn analyze(&self, ctx: &AiTickerContext) -> Result<AiReview, JudgeError>;
+}
+
 pub trait Clock: Send + Sync {
     fn now(&self) -> DateTime<Utc>;
 }
@@ -174,6 +218,7 @@ mod tests {
             _: Option<Arc<dyn EarningsCalendar>>,
             _: Option<Arc<dyn NewsJudge>>,
             _: Option<Arc<dyn Strategy>>,
+            _: Option<Arc<dyn AiStrategist>>,
         ) {
         }
         let c: Arc<dyn Clock> = Arc::new(SystemClock);
