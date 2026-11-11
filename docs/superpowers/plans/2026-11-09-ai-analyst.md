@@ -74,10 +74,12 @@
 
 ## Крок 8. Приймання і пакування
 
+- [x] Чекліст приймання створено: `docs/acceptance/part2.md` (пункти 2–6 —
+      ручні процедури на paper-ключах, позначаються після виконання)
 - [ ] Ручне приймання: запуск джоба на paper-ключах, пропозиція → схвалення → ордер
-      на Alpaca paper; `docs/acceptance/part2.md`
-- [ ] `pnpm package` → NSIS-інсталятор
-- [ ] Коміт: `docs: part 2 acceptance checklist`
+      на Alpaca paper (пункти чеклісту 2–6)
+- [x] `pnpm package` → NSIS-інсталятор (`Fond_0.1.0_x64-setup.exe`, 8.72 MiB)
+- [x] Коміт: `docs: part 2 acceptance checklist`
 
 ## Ключові рішення (зафіксовані)
 
