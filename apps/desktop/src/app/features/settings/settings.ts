@@ -3,6 +3,7 @@ import { Component, OnInit, inject, signal } from '@angular/core';
 import { errorMessage } from '../../core/api-error';
 import { EngineService } from '../../core/engine.service';
 import type { EngineConfig } from '../../core/generated/EngineConfig';
+import type { AiReviewConfig } from '../../core/generated/AiReviewConfig';
 import type { ExecutionMode } from '../../core/generated/ExecutionMode';
 import type { NewsFilterConfig } from '../../core/generated/NewsFilterConfig';
 import type { RiskConfig } from '../../core/generated/RiskConfig';
@@ -90,7 +91,7 @@ function boolValue(event: Event): boolean {
   return (event.target as HTMLInputElement).checked;
 }
 
-/** Екран «Налаштування»: ключі, режим, ліміти, розклад, фільтри, юніверс. */
+/** Екран «Налаштування»: ключі, режим, ліміти, розклад, фільтри, AI, юніверс. */
 @Component({
   selector: 'app-settings',
   standalone: true,
@@ -277,6 +278,56 @@ export class Settings implements OnInit {
     return [
       { value: 'block', label: 'блок угод' },
       { value: 'allow', label: 'дозволити' },
+    ];
+  }
+
+  // ---------------------------------------------------------- AI-аналітик
+
+  protected setAiBoolean(key: 'enabled', event: Event): void {
+    this.patch((draft) => {
+      draft.ai[key] = boolValue(event);
+    });
+  }
+
+  protected setAi(key: 'model' | 'effort', event: Event): void {
+    const value = inputValue(event);
+    this.patch((draft) => {
+      (draft.ai as unknown as Record<string, string>)[key] = value;
+    });
+  }
+
+  protected setAiNumber(
+    key: 'context_bars' | 'max_proposals' | 'lookback_days',
+    event: Event,
+  ): void {
+    const value = Math.max(0, Math.round(numValue(event) || 0));
+    this.patch((draft) => {
+      (draft.ai as unknown as Record<string, number>)[key] = value;
+    });
+  }
+
+  /** Частка стратегії `ai` в інтерфейсі — відсотки (0.25 → 25). */
+  protected aiAllocationPercent(): number {
+    return (this.config()?.ai.allocation ?? 0) * 100;
+  }
+
+  protected setAiAllocation(event: Event): void {
+    const fraction = numValue(event) / 100;
+    this.patch((draft) => {
+      draft.ai.allocation = Math.round(fraction * 1e9) / 1e9;
+    });
+  }
+
+  protected aiValue(key: keyof AiReviewConfig): string | number | boolean {
+    const ai = this.config()?.ai;
+    return (ai as unknown as Record<string, string | number | boolean>)?.[key] ?? '';
+  }
+
+  protected aiEfforts(): Array<{ value: string; label: string }> {
+    return [
+      { value: 'low', label: 'низький' },
+      { value: 'medium', label: 'середній' },
+      { value: 'high', label: 'високий' },
     ];
   }
 

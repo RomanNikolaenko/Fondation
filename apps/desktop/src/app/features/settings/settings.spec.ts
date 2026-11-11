@@ -77,6 +77,15 @@ function apiMock(): ApiMock {
         lookahead_calendar_days: 30,
         on_unavailable: 'block',
       },
+      ai: {
+        enabled: false,
+        model: 'claude-haiku-5-5',
+        effort: 'low',
+        context_bars: 90,
+        max_proposals: 5,
+        lookback_days: 7,
+        allocation: 0.25,
+      },
       backtest: { slippage_bps: 2, commission_per_share: 0.005, commission_min: 1 },
       ui: { disclaimer_accepted_at: null, notifications_enabled: true },
     }),
@@ -196,5 +205,66 @@ describe('Settings screen', () => {
       const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
       expect(text).toContain('Київ ≈');
     });
+  });
+
+  it('ai allocation input converts percent to fraction on save', async () => {
+    const api = apiMock();
+    configure(api);
+
+    const fixture = TestBed.createComponent(Settings);
+    fixture.detectChanges();
+    await vi.waitFor(() => expect(api.getConfig).toHaveBeenCalled());
+    fixture.detectChanges();
+
+    const input = (fixture.nativeElement as HTMLElement).querySelector(
+      'input[name="ai_allocation"]',
+    ) as HTMLInputElement;
+    expect(input.value).toBe('25');
+    input.value = '30';
+    input.dispatchEvent(new Event('input'));
+
+    (
+      (fixture.nativeElement as HTMLElement).querySelector('button.primary') as HTMLButtonElement
+    ).click();
+
+    await vi.waitFor(() => expect(api.putConfig).toHaveBeenCalledTimes(1));
+    const sent = api.putConfig.mock.calls[0]?.[0] as unknown as {
+      ai: { allocation: number };
+    };
+    expect(sent.ai.allocation).toBe(0.3);
+  });
+
+  it('ai fields patch the ai config on input', async () => {
+    const api = apiMock();
+    configure(api);
+
+    const fixture = TestBed.createComponent(Settings);
+    fixture.detectChanges();
+    await vi.waitFor(() => expect(api.getConfig).toHaveBeenCalled());
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+
+    const enable = root.querySelector('input[name="ai_enabled"]') as HTMLInputElement;
+    enable.click();
+
+    const model = root.querySelector('input[name="ai_model"]') as HTMLInputElement;
+    model.value = 'claude-sonnet-5';
+    model.dispatchEvent(new Event('input'));
+
+    const bars = root.querySelector('input[name="ai_context_bars"]') as HTMLInputElement;
+    bars.value = '120';
+    bars.dispatchEvent(new Event('input'));
+
+    (root.querySelector('button.primary') as HTMLButtonElement).click();
+
+    await vi.waitFor(() => expect(api.putConfig).toHaveBeenCalledTimes(1));
+    const sent = api.putConfig.mock.calls[0]?.[0] as unknown as {
+      ai: { enabled: boolean; model: string; context_bars: number; effort: string };
+    };
+    expect(sent.ai.enabled).toBe(true);
+    expect(sent.ai.model).toBe('claude-sonnet-5');
+    expect(sent.ai.context_bars).toBe(120);
+    expect(sent.ai.effort).toBe('low');
   });
 });

@@ -218,6 +218,79 @@
       </select>
     </label>
   </fieldset>
+
+  <fieldset class="card">
+    <legend>AI-аналітик (Claude)</legend>
+    <label class="check">
+      <input
+        type="checkbox"
+        name="ai_enabled"
+        [checked]="aiValue('enabled')"
+        (change)="setAiBoolean('enabled', $event)"
+      />
+      <span>Увімкнути AI-аналітик</span>
+    </label>
+    <label>
+      <span>Модель</span>
+      <input
+        type="text"
+        name="ai_model"
+        autocomplete="off"
+        [value]="aiValue('model')"
+        (input)="setAi('model', $event)"
+      />
+    </label>
+    <label>
+      <span>Рівень мислення</span>
+      <select name="ai_effort" [value]="aiValue('effort')" (change)="setAi('effort', $event)">
+        @for (effort of aiEfforts(); track effort.value) {
+        <option [value]="effort.value">{{ effort.label }}</option>
+        }
+      </select>
+    </label>
+    <label>
+      <span>Барів контексту на тікер</span>
+      <input
+        type="number"
+        name="ai_context_bars"
+        [value]="aiValue('context_bars')"
+        (input)="setAiNumber('context_bars', $event)"
+      />
+    </label>
+    <label>
+      <span>Максимум пропозицій за запуск</span>
+      <input
+        type="number"
+        name="ai_max_proposals"
+        [value]="aiValue('max_proposals')"
+        (input)="setAiNumber('max_proposals', $event)"
+      />
+    </label>
+    <label>
+      <span>Глибина даних, днів</span>
+      <input
+        type="number"
+        name="ai_lookback_days"
+        [value]="aiValue('lookback_days')"
+        (input)="setAiNumber('lookback_days', $event)"
+      />
+    </label>
+    <label>
+      <span>Частка для стратегії AI, %</span>
+      <input
+        type="number"
+        name="ai_allocation"
+        step="0.1"
+        [value]="aiAllocationPercent()"
+        (input)="setAiAllocation($event)"
+      />
+    </label>
+    <p class="hint">
+      AI лише пропонує: пропозиції проходять ризик-менеджер і конвеєр схвалення, ордери
+      відправляються тільки через нього. Бюджет LLM спільний із перевіркою новин. Витрати дивіться
+      на екрані «AI-аналіз».
+    </p>
+  </fieldset>
   }
 
   <app-universe-section />
