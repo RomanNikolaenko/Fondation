@@ -4,10 +4,11 @@ import type { CostModel } from "./CostModel";
 import type { EarningsFilterConfig } from "./EarningsFilterConfig";
 import type { ExecutionMode } from "./ExecutionMode";
 import type { NewsFilterConfig } from "./NewsFilterConfig";
+import type { PortfolioConfig } from "./PortfolioConfig";
 import type { RiskConfig } from "./RiskConfig";
 import type { ScannerConfig } from "./ScannerConfig";
 import type { ScheduleConfig } from "./ScheduleConfig";
 import type { StrategiesConfig } from "./StrategiesConfig";
 import type { UiConfig } from "./UiConfig";
 
-export type EngineConfig = { execution_mode: ExecutionMode, api_port: number, refresh_window_days: number, schedule: ScheduleConfig, scanner: ScannerConfig, risk: RiskConfig, strategies: StrategiesConfig, news_filter: NewsFilterConfig, ai: AiReviewConfig, earnings_filter: EarningsFilterConfig, backtest: CostModel, ui: UiConfig, };
+export type EngineConfig = { execution_mode: ExecutionMode, api_port: number, refresh_window_days: number, schedule: ScheduleConfig, scanner: ScannerConfig, risk: RiskConfig, strategies: StrategiesConfig, news_filter: NewsFilterConfig, ai: AiReviewConfig, earnings_filter: EarningsFilterConfig, portfolio: PortfolioConfig, backtest: CostModel, ui: UiConfig, };

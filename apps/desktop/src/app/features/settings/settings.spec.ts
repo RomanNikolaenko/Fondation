@@ -86,6 +86,13 @@ function apiMock(): ApiMock {
         lookback_days: 7,
         allocation: 0.25,
       },
+      portfolio: {
+        enabled: false,
+        rebalance: 'off',
+        targets: {},
+        drift: 0.05,
+        min_order_usd: 100,
+      },
       backtest: { slippage_bps: 2, commission_per_share: 0.005, commission_min: 1 },
       ui: { disclaimer_accepted_at: null, notifications_enabled: true },
     }),

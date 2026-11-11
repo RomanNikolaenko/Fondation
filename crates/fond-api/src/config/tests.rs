@@ -37,6 +37,11 @@ fn defaults_match_contract() {
     assert_eq!(c.earnings_filter.days_ahead, 3);
     assert_eq!(c.earnings_filter.lookahead_calendar_days, 10);
     assert_eq!(c.earnings_filter.on_unavailable, UnavailablePolicy::Block);
+    assert!(!c.portfolio.enabled);
+    assert_eq!(c.portfolio.rebalance, RebalanceMode::Off);
+    assert!(c.portfolio.targets.is_empty());
+    assert_eq!(c.portfolio.drift, 0.05);
+    assert_eq!(c.portfolio.min_order_usd, 100.0);
     assert_eq!(c.ui.disclaimer_accepted_at, None);
     assert!(c.ui.notifications_enabled);
 }
@@ -137,6 +142,51 @@ fn validate_checks_each_rule() {
     );
     bad(|c| c.news_filter.model = " ".into(), "model");
     bad(|c| c.news_filter.effort = "max".into(), "effort");
+    bad(|c| c.ai.model = " ".into(), "ai.model");
+    bad(|c| c.ai.effort = "max".into(), "ai.effort");
+    bad(|c| c.ai.context_bars = 10, "ai.context_bars");
+    bad(|c| c.ai.max_proposals = 0, "ai.max_proposals");
+    bad(|c| c.ai.lookback_days = 31, "ai.lookback_days");
+    bad(|c| c.ai.allocation = 0.0, "ai.allocation");
+    // Вага поза діапазоном дає два повідомлення: діапазон і сума.
+    {
+        let mut c = EngineConfig::default();
+        c.portfolio.targets.insert("SPY".into(), 1.5);
+        let errs = c.validate().unwrap_err();
+        assert_eq!(errs.len(), 2, "{errs:?}");
+        assert!(
+            errs.iter().any(|e| e.contains("portfolio.targets.SPY")),
+            "{errs:?}"
+        );
+        assert!(
+            errs.iter().any(|e| e.contains("сума цільових ваг")),
+            "{errs:?}"
+        );
+    }
+    {
+        let mut c = EngineConfig::default();
+        c.portfolio.targets.insert("SPY".into(), 0.0);
+        let errs = c.validate().unwrap_err();
+        assert_eq!(errs.len(), 1, "{errs:?}");
+        assert!(errs[0].contains("portfolio.targets.SPY"), "{errs:?}");
+    }
+    bad(
+        |c| {
+            c.portfolio.targets.insert("SPY".into(), 0.6);
+            c.portfolio.targets.insert("AAPL".into(), 0.6);
+        },
+        "сума цільових ваг",
+    );
+    bad(|c| c.portfolio.drift = 0.0, "portfolio.drift");
+    bad(|c| c.portfolio.drift = 0.6, "portfolio.drift");
+    bad(
+        |c| c.portfolio.min_order_usd = 0.5,
+        "portfolio.min_order_usd",
+    );
+    bad(
+        |c| c.portfolio.enabled = true,
+        "rebalance = monthly або quarterly",
+    );
     bad(|c| c.api_port = 80, "api_port");
     bad(|c| c.refresh_window_days = 449, "refresh_window_days");
 }
@@ -151,6 +201,32 @@ fn validate_accepts_boundaries() {
     c.refresh_window_days = 450;
     c.risk.max_gross_exposure = 1.0;
     c.validate().unwrap();
+}
+
+#[test]
+fn portfolio_config_roundtrips_toml() {
+    let toml_src = r#"
+[portfolio]
+enabled = true
+rebalance = "monthly"
+drift = 0.03
+min_order_usd = 250
+
+[portfolio.targets]
+SPY = 0.5
+AAPL = 0.2
+"#;
+    let c: EngineConfig = toml::from_str(toml_src).unwrap();
+    assert!(c.portfolio.enabled);
+    assert_eq!(c.portfolio.rebalance, RebalanceMode::Monthly);
+    assert_eq!(c.portfolio.targets.get("SPY"), Some(&0.5));
+    assert_eq!(c.portfolio.targets.get("AAPL"), Some(&0.2));
+    c.validate().unwrap();
+
+    // Серіалізація назад читається так само.
+    let s = toml::to_string_pretty(&c.portfolio).unwrap();
+    let back: PortfolioConfig = toml::from_str(&s).unwrap();
+    assert_eq!(back, c.portfolio);
 }
 
 #[test]

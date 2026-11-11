@@ -1,5 +1,7 @@
 //! Контракт конфігурації рушія (`config.toml`) і файлу виявлення (`engine.json`).
 
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, NaiveTime, Utc};
 use fond_backtest::CostModel;
 use fond_core::risk::RiskConfig;
@@ -23,6 +25,15 @@ pub enum CautionPolicy {
 pub enum UnavailablePolicy {
     Block,
     Allow,
+}
+
+/// Періодичність автоматичного ребалансування портфеля.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum RebalanceMode {
+    Off,
+    Monthly,
+    Quarterly,
 }
 
 /// Час доби у форматі `HH:MM` (читається також `HH:MM:SS`).
@@ -149,6 +160,32 @@ impl Default for AiReviewConfig {
     }
 }
 
+/// Довгостроковий портфель: цільові ваги тікерів і ребалансування за розкладом.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(default)]
+pub struct PortfolioConfig {
+    pub enabled: bool,
+    pub rebalance: RebalanceMode,
+    /// Тікер → вага (частка equity); сума ≤ 1, залишок — кеш або swing-стратегії.
+    pub targets: BTreeMap<String, f64>,
+    /// Поріг: |ціль − факт| нижче `drift × equity` не торгується.
+    pub drift: f64,
+    /// Дельти дешевше цього (USD) не стають ордерами.
+    pub min_order_usd: f64,
+}
+
+impl Default for PortfolioConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            rebalance: RebalanceMode::Off,
+            targets: BTreeMap::new(),
+            drift: 0.05,
+            min_order_usd: 100.0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(default)]
 pub struct EarningsFilterConfig {
@@ -198,6 +235,7 @@ pub struct EngineConfig {
     pub news_filter: NewsFilterConfig,
     pub ai: AiReviewConfig,
     pub earnings_filter: EarningsFilterConfig,
+    pub portfolio: PortfolioConfig,
     pub backtest: CostModel,
     pub ui: UiConfig,
 }
@@ -215,6 +253,7 @@ impl Default for EngineConfig {
             news_filter: NewsFilterConfig::default(),
             ai: AiReviewConfig::default(),
             earnings_filter: EarningsFilterConfig::default(),
+            portfolio: PortfolioConfig::default(),
             backtest: CostModel::default(),
             ui: UiConfig::default(),
         }
@@ -328,6 +367,38 @@ impl EngineConfig {
                 "ai.allocation має бути в межах (0, 1], зараз {}",
                 a.allocation
             ));
+        }
+
+        let p = &self.portfolio;
+        for (symbol, w) in &p.targets {
+            if !in_unit(*w) {
+                errs.push(format!(
+                    "portfolio.targets.{symbol} має бути в межах (0, 1], зараз {w}"
+                ));
+            }
+        }
+        let sum: f64 = p.targets.values().copied().sum();
+        if sum.is_finite() && sum > 1.0 {
+            errs.push(format!(
+                "portfolio: сума цільових ваг має бути не більшою за 1 (100%), зараз {sum}"
+            ));
+        }
+        if !(0.0 < p.drift && p.drift <= 0.5) {
+            errs.push(format!(
+                "portfolio.drift має бути в межах (0, 0.5], зараз {}",
+                p.drift
+            ));
+        }
+        if !p.min_order_usd.is_finite() || p.min_order_usd < 1.0 {
+            errs.push(format!(
+                "portfolio.min_order_usd має бути не менше 1, зараз {}",
+                p.min_order_usd
+            ));
+        }
+        if p.enabled && p.rebalance == RebalanceMode::Off {
+            errs.push(
+                "portfolio: увімкнений портфель вимагає rebalance = monthly або quarterly".into(),
+            );
         }
 
         if self.api_port < 1024 {
