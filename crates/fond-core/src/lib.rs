@@ -11,6 +11,7 @@ pub mod keys;
 pub mod orders;
 pub mod portfolio;
 pub mod price;
+pub mod rebalance;
 pub mod risk;
 pub mod scanner;
 pub mod signal;
