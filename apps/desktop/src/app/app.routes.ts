@@ -27,6 +27,7 @@ export const routes: Routes = [
         path: 'signals',
         loadComponent: () => import('./features/signals/signals').then((m) => m.Signals),
       },
+      { path: 'ai', loadComponent: () => import('./features/ai/ai').then((m) => m.Ai) },
       { path: 'chart', loadComponent: () => import('./features/chart/chart').then((m) => m.Chart) },
       {
         path: 'journal',

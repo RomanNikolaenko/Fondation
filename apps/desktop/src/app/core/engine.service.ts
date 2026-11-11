@@ -2,6 +2,8 @@ import { Injectable } from '@angular/core';
 import { invoke } from '@tauri-apps/api/core';
 
 import type { AccountDto } from './generated/AccountDto';
+import type { AiProposalDto } from './generated/AiProposalDto';
+import type { AiRunQueuedDto } from './generated/AiRunQueuedDto';
 import type { BacktestDetailDto } from './generated/BacktestDetailDto';
 import type { BacktestRequest } from './generated/BacktestRequest';
 import type { BacktestRunDto } from './generated/BacktestRunDto';
@@ -63,6 +65,14 @@ export class EngineService {
 
   getScan(date: string): Promise<ScanResultDto[]> {
     return this.call('get_scan', { date });
+  }
+
+  getAiProposals(days?: number): Promise<AiProposalDto[]> {
+    return this.call('get_ai_proposals', days === undefined ? {} : { days });
+  }
+
+  runAiAnalysis(): Promise<AiRunQueuedDto> {
+    return this.call('run_ai_analysis');
   }
 
   getIntents(statuses: IntentStatus[] = []): Promise<Intent[]> {

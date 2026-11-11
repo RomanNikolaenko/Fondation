@@ -3,9 +3,9 @@
 use chrono::NaiveDate;
 use fond_api::config::EngineConfig;
 use fond_api::dto::{
-    AccountDto, AddSymbolRequest, ExcludeRequest, HistoryJobDto, ImportResultDto, KillRequest,
-    KillResultDto, PositionDto, ScanResultDto, SecretStatusDto, SetSecretRequest, SignalDto,
-    StatusDto, UniverseEntryDto, VerifyResultDto,
+    AccountDto, AddSymbolRequest, AiProposalDto, AiRunQueuedDto, ExcludeRequest, HistoryJobDto,
+    ImportResultDto, KillRequest, KillResultDto, PositionDto, ScanResultDto, SecretStatusDto,
+    SetSecretRequest, SignalDto, StatusDto, UniverseEntryDto, VerifyResultDto,
 };
 use fond_api::events::JournalEventDto;
 use fond_backtest::BacktestRequest;
@@ -71,6 +71,28 @@ pub async fn get_scan(
 ) -> Result<Vec<ScanResultDto>, ClientError> {
     let path = format!("/scan?date={date}");
     client(&state).await?.get(&path).await
+}
+
+// ---------------------------------------------------------------- AI-аналітик
+
+#[tauri::command]
+pub async fn get_ai_proposals(
+    state: State<'_, AppState>,
+    days: Option<u32>,
+) -> Result<Vec<AiProposalDto>, ClientError> {
+    let path = match days {
+        Some(days) => format!("/proposals/ai?days={days}"),
+        None => "/proposals/ai".to_string(),
+    };
+    client(&state).await?.get(&path).await
+}
+
+#[tauri::command]
+pub async fn run_ai_analysis(state: State<'_, AppState>) -> Result<AiRunQueuedDto, ClientError> {
+    client(&state)
+        .await?
+        .send::<(), AiRunQueuedDto>(Method::POST, "/proposals/ai/run", None)
+        .await
 }
 
 #[tauri::command]

@@ -1,0 +1,94 @@
+<section class="ai">
+  <header class="head">
+    <h1>AI-аналіз</h1>
+    <button type="button" class="primary" [disabled]="running()" (click)="run()">
+      {{ running() ? 'Запуск…' : 'Запустити аналіз' }}
+    </button>
+  </header>
+
+  @if (error()) {
+  <p class="error" role="alert">{{ error() }}</p>
+  } @if (queued(); as date) {
+  <p class="notice" role="status">
+    Аналіз за {{ date }} запущено у фоні. Пропозиції з’являться в списку, коли аналіз завершиться —
+    оновлення приходити автоматично.
+  </p>
+  }
+
+  <form class="filters">
+    <label>
+      <span>Статус</span>
+      <select (input)="setFilter($event)">
+        <option value="all">усі пропозиції</option>
+        <option value="recorded">записані</option>
+        <option value="risk_rejected">відхилені ризиком</option>
+        <option value="intent_created">намір створено</option>
+      </select>
+    </label>
+    <label>
+      <span>Період, днів</span>
+      <select (input)="setDays($event)">
+        <option value="1">1</option>
+        <option value="7" selected>7</option>
+        <option value="30">30</option>
+      </select>
+    </label>
+  </form>
+
+  @if (!loading() && proposals().length > 0) {
+  <p class="summary">
+    Усього: {{ summary().total }} · записані: {{ summary().recorded }} · відхилені ризиком: {{
+    summary().rejected }} · наміри: {{ summary().intents }} · витрати LLM: ${{
+    totalCost().toFixed(4) }}
+  </p>
+  } @if (loading()) {
+  <p class="muted">Завантаження…</p>
+  } @else if (proposals().length === 0) {
+  <p class="muted">
+    Пропозицій ще немає. Запустіть аналіз або зачекайте вечірнього прогону за розкладом (потрібен
+    ключ Anthropic і ввімкнений AI-аналітик у «Налаштуваннях»).
+  </p>
+  } @else if (filtered().length === 0) {
+  <p class="muted">Нічого не відповідає фільтру.</p>
+  } @else {
+  <table>
+    <thead>
+      <tr>
+        <th>Час</th>
+        <th>Символ</th>
+        <th>Дія</th>
+        <th>Статус</th>
+        <th>Стоп / таргет</th>
+        <th>Сила</th>
+        <th>Пояснення</th>
+        <th>Модель</th>
+        <th>Токени</th>
+        <th>Вартість</th>
+        <th>Причина відхилення</th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (row of filtered(); track row.id) {
+      <tr>
+        <td>{{ row.at }}</td>
+        <td>{{ row.proposal.symbol }}</td>
+        <td>{{ actionLabel(row.proposal.action) }}</td>
+        <td [class.reject]="row.status === 'risk_rejected'">{{ statusLabel(row.status) }}</td>
+        <td>{{ row.proposal.stop_price }} / {{ row.proposal.take_profit ?? '—' }}</td>
+        <td>{{ row.proposal.strength }}</td>
+        <td class="explanation">{{ row.proposal.explanation }}</td>
+        <td>{{ row.model }}</td>
+        <td>{{ row.input_tokens }} / {{ row.output_tokens }}</td>
+        <td>${{ row.cost_usd.toFixed(4) }}</td>
+        <td>{{ row.reject_reason ?? '—' }}</td>
+      </tr>
+      }
+    </tbody>
+  </table>
+  }
+
+  <p class="hint">
+    Схвалення намірів — на екрані «Схвалення». AI лише пропонує: рішення ухвалює ризик-менеджер, а
+    ордери відправляються тільки через конвеєр.
+  </p>
+</section>

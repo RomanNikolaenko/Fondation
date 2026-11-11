@@ -52,6 +52,8 @@ pub fn run() {
             commands::get_orders,
             commands::get_signals,
             commands::get_scan,
+            commands::get_ai_proposals,
+            commands::run_ai_analysis,
             commands::get_intents,
             commands::approve_intent,
             commands::reject_intent,
