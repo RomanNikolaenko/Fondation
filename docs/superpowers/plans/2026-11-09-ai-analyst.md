@@ -36,9 +36,13 @@
 
 ## Крок 5. REST/DTO у `fond-api`
 
-- [ ] `AiProposalDto`, `GET /proposals/ai?limit=`, `POST /proposals/ai/run`
-- [ ] Џереєрація TypeScript (DTO-снапшот узгоджений)
-- [ ] Коміт: `feat(api): ai analyst endpoints`
+- [x] `AiProposalDto` + `AiRunQueuedDto`, `GET /proposals/ai?days=` (вікно 1..30 днів, default 7),
+      `POST /proposals/ai/run` (202 у фоні; Jobs mutex `ai` → 409; `Engine::run_manual_analysis`
+      під `job_lock` з записом кроку `Analysis`, як у розкладу)
+- [x] Перегенерація TypeScript (`AiProposalDto.ts`, `AiRunQueuedDto.ts`, `AiProposal.ts`,
+      `AiAction.ts`; фіксація `ai` у `strategies.spec.ts`)
+- [x] Тести API: журнал і вікно `days`; 202 → крок `Analysis` = `Done` + скан дня; 409 конфлікт
+- [x] Коміт: `feat(api): ai analyst endpoints`
 
 ## Крок 6. Екран «AI-аналіз» в `apps/desktop`
 
