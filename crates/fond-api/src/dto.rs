@@ -5,6 +5,7 @@
 
 use chrono::{DateTime, NaiveDate, Utc};
 use fond_backtest::{BacktestRequest, BacktestResult};
+use fond_core::ai::AiProposal;
 use fond_core::signal::EntrySignal;
 use fond_core::types::{AccountMode, ExecutionMode};
 use serde::{Deserialize, Serialize};
@@ -78,6 +79,32 @@ pub struct SignalDto {
     pub signal: EntrySignal,
     pub status: String,
     pub reject_reason: Option<String>,
+}
+
+/// Запис журналу AI-пропозицій: пропозиція моделі, витрати LLM і шлях конвеєра.
+/// `status` — `"recorded"`, `"risk_rejected"` або `"intent_created"`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+pub struct AiProposalDto {
+    #[ts(type = "number")]
+    pub id: i64,
+    pub at: DateTime<Utc>,
+    pub run_date: NaiveDate,
+    pub proposal: AiProposal,
+    pub model: String,
+    #[ts(type = "number")]
+    pub input_tokens: i64,
+    #[ts(type = "number")]
+    pub output_tokens: i64,
+    pub cost_usd: f64,
+    pub status: String,
+    pub reject_reason: Option<String>,
+}
+
+/// Відповідь на `POST /proposals/ai/run`: 202, аналіз триває у фоні.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct AiRunQueuedDto {
+    /// День аналізу: остання сесія, час аналізу якої вже настав.
+    pub date: NaiveDate,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

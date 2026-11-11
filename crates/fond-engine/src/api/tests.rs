@@ -13,6 +13,7 @@ use fond_adapters::secrets::{MemorySecretStore, SecretStore};
 use fond_api::config::EngineConfig;
 use fond_api::events::{EngineEventDto, JournalEventDto};
 use fond_backtest::{BacktestRequest, CostModel};
+use fond_core::ai::{AiAction, AiProposal};
 use fond_core::calendar::et_to_utc;
 use fond_core::error::DataError;
 use fond_core::ids::IntentTag;
@@ -24,7 +25,7 @@ use fond_core::risk::RiskConfig;
 use fond_core::scanner::ScannerConfig;
 use fond_core::testkit::uptrend_then_pullback;
 use fond_core::types::{EngineMode, ExecutionMode, Symbol};
-use fond_store::{EquityKind, EquitySnapshot, EventQuery};
+use fond_store::{EquityKind, EquitySnapshot, EventQuery, NewAiProposal, StepName, StepStatus};
 use fond_strategies::StrategiesConfig;
 use futures::StreamExt;
 use rust_decimal_macros::dec;
@@ -1187,4 +1188,109 @@ async fn history_job_is_idle_then_single() {
         )
         .await;
     assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+// ---------------------------------------------------------------- AI-аналітик
+
+fn new_ai_proposal(at: chrono::DateTime<Utc>) -> NewAiProposal {
+    NewAiProposal {
+        at,
+        run_date: d(2026, 11, 5),
+        proposal: AiProposal {
+            symbol: "MSFT".into(),
+            action: AiAction::Buy,
+            reference_price: 400.0,
+            stop_price: 385.0,
+            take_profit: Some(440.0),
+            strength: 0.72,
+            explanation: "Тренд нагору, новини позитивні.".into(),
+            key_reasons: vec!["Ціна над опорою.".into()],
+        },
+        model: "claude-haiku-5-5-20261001".into(),
+        input_tokens: 2200,
+        output_tokens: 90,
+        cost_usd: 0.01,
+    }
+}
+
+#[tokio::test]
+async fn ai_proposals_list_and_window() {
+    let a = api().await;
+    let (st, v) = a.get("/proposals/ai").await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(v.as_array().unwrap().is_empty());
+
+    let now = a.d.clock.now();
+    let id =
+        a.d.store
+            .add_ai_proposal(&new_ai_proposal(now))
+            .await
+            .unwrap();
+    // Запис старший за типовий тиждень — має бути видно лише при `days=30`.
+    let old = new_ai_proposal(now - Duration::days(20));
+    a.d.store.add_ai_proposal(&old).await.unwrap();
+
+    let (_, v) = a.get("/proposals/ai").await;
+    let list = v.as_array().unwrap();
+    assert_eq!(list.len(), 1, "{v}");
+    assert_eq!(list[0]["id"], id);
+    assert_eq!(list[0]["status"], "recorded");
+    assert_eq!(list[0]["proposal"]["symbol"], "MSFT");
+    assert_eq!(list[0]["proposal"]["action"], "buy");
+    assert_eq!(list[0]["proposal"]["stop_price"], 385.0);
+    assert_eq!(list[0]["input_tokens"], 2200);
+    assert_eq!(list[0]["output_tokens"], 90);
+    assert_eq!(list[0]["cost_usd"], 0.01);
+    assert_eq!(list[0]["model"], "claude-haiku-5-5-20261001");
+    assert_eq!(list[0]["run_date"], "2026-11-05");
+
+    let (_, v) = a.get("/proposals/ai?days=30").await;
+    assert_eq!(v.as_array().unwrap().len(), 2);
+    // `days` обрізається до 1..=30: 0 → одноденне вікно, лише свіжий запис.
+    let (_, v) = a.get("/proposals/ai?days=0").await;
+    assert_eq!(v.as_array().unwrap().len(), 1);
+    // Строки не числа — 422.
+    let (st, v) = a.get("/proposals/ai?days=abc").await;
+    assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY, "{v}");
+}
+
+#[tokio::test]
+async fn run_ai_starts_analysis_in_background() {
+    let a = api().await;
+    let (st, v) = a.call(Method::POST, "/proposals/ai/run", None).await;
+    assert_eq!(st, StatusCode::ACCEPTED, "{v}");
+    let date = chrono::NaiveDate::parse_from_str(v["date"].as_str().unwrap(), "%Y-%m-%d").unwrap();
+
+    let deadline = tokio::time::Instant::now() + StdDuration::from_secs(30);
+    let status = loop {
+        let rec =
+            a.d.store
+                .step_status(date, StepName::Analysis)
+                .await
+                .unwrap();
+        if let Some((status, _)) = rec
+            && matches!(status, StepStatus::Done | StepStatus::Failed)
+        {
+            break status;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "аналіз не завершився"
+        );
+        tokio::time::sleep(StdDuration::from_millis(20)).await;
+    };
+    assert_eq!(status, StepStatus::Done, "аналіз має завершитися успішно");
+    // Скан дня записано: крок аналізу дійшов до кінця.
+    let scan = a.d.store.scan_results(date).await.unwrap();
+    assert!(!scan.is_empty(), "скан дня має бути записано");
+}
+
+#[tokio::test]
+async fn run_ai_conflicts_while_another_run_holds_mutex() {
+    let a = api().await;
+    let held = a.engine.jobs().try_ai().unwrap();
+    let (st, body) = a.call(Method::POST, "/proposals/ai/run", None).await;
+    assert_eq!(st, StatusCode::CONFLICT);
+    assert!(error_text(&body).contains("уже виконується"));
+    drop(held);
 }

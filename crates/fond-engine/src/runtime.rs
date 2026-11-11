@@ -343,6 +343,56 @@ impl Engine {
         self.job_lock.lock().await
     }
 
+    /// Ручний запуск вечірнього аналізу з UI: той самий крок `Analysis`, що й розкладом,
+    /// з тими самими записами кроків (`Running` → `Done`/`Failed`). Поки аналіз іде,
+    /// тік чекає на `job_lock`. Повертає день аналізу.
+    pub async fn run_manual_analysis(self: Arc<Self>) -> Result<NaiveDate, CycleError> {
+        let result = self.run_manual_analysis_inner().await;
+        if let Err(e) = &result {
+            // Помилка ручного запуску має бути видима в журналі та на шині подій.
+            self.note(
+                EventKind::Error,
+                format!("Ручний запуск аналізу завершився помилкою: {e}"),
+                json!({ "step": "analysis", "manual": true, "error": e.to_string() }),
+            )
+            .await;
+        }
+        result
+    }
+
+    async fn run_manual_analysis_inner(&self) -> Result<NaiveDate, CycleError> {
+        let cfg = self.config().await;
+        let d = match self.deps().await {
+            Ok(d) => d,
+            Err(SetupError::Other(m)) => return Err(CycleError::Other(m)),
+            Err(SetupError::MissingSecrets(keys)) => {
+                return Err(CycleError::Other(format!(
+                    "відсутні секрети: {}",
+                    keys.iter()
+                        .map(|k| k.account().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )));
+            }
+        };
+        let _job = self.job_lock.lock().await;
+        let now = self.clock.now();
+        self.ensure_calendar(&d, now).await?;
+        let (cal, records) = self.load_schedule(&cfg, now).await?;
+        let probe = ScheduleInput {
+            now,
+            cal: &cal,
+            cfg: &cfg.schedule,
+            records: &records,
+            last_reconcile: None,
+            stale_after: Duration::minutes(STALE_AFTER_MINUTES),
+        };
+        let date = latest_analysis_date(&probe).ok_or(CycleError::NoCalendar)?;
+        let step = DueStep::Analysis { date };
+        self.run_step(&d, &cfg, &step).await?;
+        Ok(date)
+    }
+
     /// Календар зі сховища (±40 днів навколо сьогодні за ET) і записи кроків, які дивиться
     /// розклад: аналіз за `latest_analysis_date` та дедлайн і відправка сьогоднішньої сесії.
     pub async fn records_and_calendar(&self) -> Result<(TradingCalendar, StepRecords), CycleError> {

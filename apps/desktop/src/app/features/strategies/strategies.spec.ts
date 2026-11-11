@@ -84,6 +84,15 @@ const CONFIG: EngineConfig = {
     lookahead_calendar_days: 30,
     on_unavailable: 'block',
   },
+  ai: {
+    enabled: false,
+    model: 'claude-haiku-5-5',
+    effort: 'low',
+    context_bars: 90,
+    max_proposals: 5,
+    lookback_days: 7,
+    allocation: 0.25,
+  },
   backtest: { slippage_bps: 2, commission_per_share: 0.005, commission_min: 1 },
   ui: { disclaimer_accepted_at: null, notifications_enabled: true },
 };

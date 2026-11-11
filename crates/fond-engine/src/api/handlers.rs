@@ -14,10 +14,10 @@ use axum::http::StatusCode;
 use chrono::{DateTime, Duration, NaiveDate, NaiveTime, Utc};
 use fond_api::config::EngineConfig;
 use fond_api::dto::{
-    AccountDto, AddSymbolRequest, BacktestDetailDto, BacktestRunDto, EngineModeDto, ExcludeRequest,
-    HealthDto, HistoryJobDto, HistoryRequest, ImportResultDto, KillRequest, KillResultDto,
-    NextStepDto, PositionDto, ScanResultDto, SecretStatusDto, SetSecretRequest, SignalDto,
-    StatusDto, UniverseEntryDto, VerifyResultDto,
+    AccountDto, AddSymbolRequest, AiProposalDto, AiRunQueuedDto, BacktestDetailDto, BacktestRunDto,
+    EngineModeDto, ExcludeRequest, HealthDto, HistoryJobDto, HistoryRequest, ImportResultDto,
+    KillRequest, KillResultDto, NextStepDto, PositionDto, ScanResultDto, SecretStatusDto,
+    SetSecretRequest, SignalDto, StatusDto, UniverseEntryDto, VerifyResultDto,
 };
 use fond_api::events::{EngineEventDto, JournalEventDto};
 use fond_backtest::{BacktestRequest, BacktestResult};
@@ -30,8 +30,8 @@ use fond_core::portfolio::BrokerPosition;
 use fond_core::price::to_f64;
 use fond_core::types::{AccountMode, Bar, EngineMode, Symbol};
 use fond_store::{
-    BacktestRow, EventKind, EventQuery, NewEvent, SignalStatus, Store, UniverseEntry,
-    UniverseSource, parse_universe_csv,
+    AiProposalStatus, BacktestRow, EventKind, EventQuery, NewEvent, SignalStatus, Store,
+    UniverseEntry, UniverseSource, parse_universe_csv,
 };
 use rust_decimal::Decimal;
 use serde::Deserialize;
@@ -46,7 +46,7 @@ use crate::cycle::{journal_dto, week_monday};
 use crate::deps::{Deps, SetupError, verify_secrets as verify_keys};
 use crate::jobs::{JOB_RUNNING, history_download_job, publish_history, run_backtest_job};
 use crate::runtime::{Engine, STALE_AFTER_MINUTES};
-use crate::schedule::{ScheduleInput, next_step_at};
+use crate::schedule::{ScheduleInput, latest_analysis_date, next_step_at};
 
 type ApiResult<T> = Result<Json<T>, ApiError>;
 
@@ -287,6 +287,91 @@ pub async fn signals(
             })
             .collect(),
     ))
+}
+
+// ---------------------------------------------------------------- AI-аналітик
+
+/// Найбільше вікно журналу AI-пропозицій, днів.
+const AI_PROPOSALS_MAX_DAYS: u32 = 30;
+
+#[derive(Debug, Deserialize)]
+pub struct AiProposalsQuery {
+    days: Option<u32>,
+}
+
+fn ai_status_str(s: AiProposalStatus) -> &'static str {
+    match s {
+        AiProposalStatus::Recorded => "recorded",
+        AiProposalStatus::RiskRejected => "risk_rejected",
+        AiProposalStatus::IntentCreated => "intent_created",
+    }
+}
+
+/// Журнал AI-пропозицій за останні `days` днів (за замовчуванням 7, максимум 30).
+pub async fn ai_proposals(
+    State(st): State<ApiState>,
+    ApiQuery(q): ApiQuery<AiProposalsQuery>,
+) -> ApiResult<Vec<AiProposalDto>> {
+    let days = q.days.unwrap_or(7).clamp(1, AI_PROPOSALS_MAX_DAYS);
+    let now = st.engine.clock().now();
+    let rows = st
+        .engine
+        .store()
+        .ai_proposals_between(
+            now - Duration::days(i64::from(days)),
+            now + Duration::minutes(1),
+        )
+        .await?;
+    Ok(Json(
+        rows.iter()
+            .map(|r| AiProposalDto {
+                id: r.id,
+                at: r.at,
+                run_date: r.run_date,
+                proposal: r.proposal.clone(),
+                model: r.model.clone(),
+                input_tokens: r.input_tokens,
+                output_tokens: r.output_tokens,
+                cost_usd: r.cost_usd,
+                status: ai_status_str(r.status).into(),
+                reject_reason: r.reject_reason.clone(),
+            })
+            .collect(),
+    ))
+}
+
+/// 202 і запуск вечірнього аналізу (з AI-проходом) у фоні; одночасно — лише один
+/// ручний запуск (інакше 409). Тік розкладу чекає на замок рушія.
+pub async fn run_ai(
+    State(st): State<ApiState>,
+) -> Result<(StatusCode, Json<AiRunQueuedDto>), ApiError> {
+    let e = &st.engine;
+    let Some(guard) = e.jobs().try_ai() else {
+        return Err(ApiError::conflict(
+            "AI-аналіз уже виконується — дочекайтеся його завершення",
+        ));
+    };
+    let cfg = e.config().await;
+    let now = e.clock().now();
+    let (cal, records) = e.records_and_calendar().await?;
+    let probe = ScheduleInput {
+        now,
+        cal: &cal,
+        cfg: &cfg.schedule,
+        records: &records,
+        last_reconcile: None,
+        stale_after: Duration::minutes(STALE_AFTER_MINUTES),
+    };
+    let date = latest_analysis_date(&probe)
+        .ok_or_else(|| ApiError::conflict("У календарі немає торгової сесії для аналізу"))?;
+    let engine = e.clone();
+    tokio::spawn(async move {
+        let _guard = guard;
+        if let Err(err) = engine.run_manual_analysis().await {
+            tracing::warn!(error = %err, "ручний запуск аналізу завершився помилкою");
+        }
+    });
+    Ok((StatusCode::ACCEPTED, Json(AiRunQueuedDto { date })))
 }
 
 pub async fn scan(

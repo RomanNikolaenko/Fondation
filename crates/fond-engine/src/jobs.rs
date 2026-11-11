@@ -33,6 +33,7 @@ pub const JOB_FAILED: &str = "failed";
 pub struct Jobs {
     backtest: Arc<Mutex<()>>,
     history: Arc<Mutex<()>>,
+    ai: Arc<Mutex<()>>,
     history_state: StdMutex<HistoryJobDto>,
 }
 
@@ -41,6 +42,7 @@ impl Default for Jobs {
         Self {
             backtest: Arc::new(Mutex::new(())),
             history: Arc::new(Mutex::new(())),
+            ai: Arc::new(Mutex::new(())),
             history_state: StdMutex::new(HistoryJobDto {
                 status: JOB_IDLE.into(),
                 progress: 0.0,
@@ -59,6 +61,11 @@ impl Jobs {
     /// Право запустити завантаження історії; `None`, якщо інше ще виконується.
     pub fn try_history(&self) -> Option<OwnedMutexGuard<()>> {
         self.history.clone().try_lock_owned().ok()
+    }
+
+    /// Право запустити AI-аналіз вручну; `None`, якщо інший ще виконується.
+    pub fn try_ai(&self) -> Option<OwnedMutexGuard<()>> {
+        self.ai.clone().try_lock_owned().ok()
     }
 
     pub fn history(&self) -> HistoryJobDto {
