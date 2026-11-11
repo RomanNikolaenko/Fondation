@@ -6,15 +6,17 @@
 
 ## Крок 1. Доменні типи і математика в `fond-core`
 
-- [ ] `IntentTag::Rebalance` (у `ids.rs`, рядок в id — `rebalance`)
-- [ ] `IntentKind::Rebalance { side, qty, limit_price }` (у `intent.rs`)
-- [ ] Модуль `rebalance.rs`: `RebalanceDelta`, `compute_deltas(targets,
-      positions, prices, equity, drift, min_order_usd, max_gap)` — продажі
-      перед купівлями, пороги drift/min_order_usd, обрізання купівель під
-      кеш, пропуски без ціни
-- [ ] Тести: пороги, обрізання кешу, продаж не більше наявного, сортування,
-      відсутність барав
-- [ ] Коміт: `feat(core): rebalance intents and delta math`
+- [x] Модуль `rebalance.rs`: `RebalanceDelta`, `SkipReason`/`Skipped`,
+      `RebalancePlan`, `compute_deltas(targets, positions, prices, equity,
+      cash, params)` — продажі перед купівлями, пороги drift/min_order_usd,
+      обрізання купівель під кеш, пропуски без ціни, продаж не більше
+      наявного (`PORTFOLIO_STRATEGY = "portfolio"`)
+- [x] Тести: пороги, обрізання кешу, сортування, відсутність барав, порожній
+      план (7 тестів, 73 зелені в крейті)
+- [ ] `IntentTag::Rebalance` + `IntentKind::Rebalance` — перенесено у Крок 3
+      (додавання варіанта енуму ламає exhaustive match у рушії; типи йдуть
+      разом із підтримкою конвеєра, щоб кожен коміт залишався зеленим)
+- [x] Коміт: `feat(core): rebalance delta math`
 
 ## Крок 2. Конфіг у `fond-api`
 
