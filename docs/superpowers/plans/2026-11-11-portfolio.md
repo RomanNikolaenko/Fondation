@@ -20,13 +20,15 @@
 
 ## Крок 2. Конфіг у `fond-api`
 
-- [ ] `PortfolioConfig { enabled, rebalance, targets: BTreeMap<…>, drift,
-      min_order_usd }` + `Default` + `#[serde(default)]` + ts-rs
-- [ ] Валідація в `EngineConfig::validate` (ваги, сума ≤ 1, drift, rebalance,
-      enabled → not off)
-- [ ] Перегенерація DTO (`PortfolioConfig.ts`, `RebalanceMode.ts` за потреби)
-- [ ] Тести валідації
-- [ ] Коміт: `feat(api): portfolio config section`
+- [x] `PortfolioConfig { enabled, rebalance: RebalanceMode, targets:
+      BTreeMap<String, f64>, drift, min_order_usd }` + `Default` +
+      `#[serde(default)]` + ts-rs; `RebalanceMode = off | monthly | quarterly`
+- [x] Валідація в `EngineConfig::validate` (ваги (0,1], сума ≤ 1,
+      drift (0, 0.5], min_order_usd ≥ 1, enabled → not off)
+- [x] Перегенерація DTO (`PortfolioConfig.ts`, `RebalanceMode.ts`); `portfolio`
+      у TS-mock-конфізах `strategies.spec.ts` і `settings.spec.ts`
+- [x] Тести валідації (18 у крейті, workspace зібрано)
+- [x] Коміт: `feat(api): portfolio config section`
 
 ## Крок 3. Прохід ребалансу в `fond-engine`
 
