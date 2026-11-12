@@ -245,6 +245,54 @@ pub(crate) async fn submit_exit(dp: &Deps, symbol: &str, qty: u32) -> (Intent, B
     (intent, order)
 }
 
+/// Відправлений ребаланс: Buy/Sell Limit Day Simple у брокері й намір `Submitted`
+/// зі стратегією `portfolio`.
+pub(crate) async fn submit_rebalance(
+    dp: &Deps,
+    symbol: &str,
+    side: Side,
+    qty: u32,
+    limit: Decimal,
+) -> (Intent, BrokerOrder) {
+    let kind = IntentKind::Rebalance {
+        side,
+        qty,
+        limit_price: limit,
+    };
+    let strategy = StrategyId::new(fond_core::rebalance::PORTFOLIO_STRATEGY);
+    let draft = Intent {
+        id: intent_id(session(), &strategy, &sym(symbol), IntentTag::Rebalance),
+        strategy,
+        ..intent_with(
+            symbol,
+            IntentTag::Rebalance,
+            kind,
+            IntentStatus::Submitted,
+            None,
+        )
+    };
+    let req = OrderRequest {
+        client_order_id: client_order_id(&draft.id),
+        symbol: sym(symbol),
+        side,
+        qty,
+        order_type: OrderType::Limit,
+        limit_price: Some(limit),
+        stop_price: None,
+        tif: TimeInForce::Day,
+        class: OrderClass::Simple,
+        stop_loss: None,
+        take_profit: None,
+    };
+    let order = dp.broker.submit(&req).await.unwrap();
+    let intent = Intent {
+        broker_order_id: Some(order.id.clone()),
+        ..draft
+    };
+    assert!(dp.store.insert_intent(&intent).await.unwrap());
+    (intent, order)
+}
+
 /// AAPL: вхід 10 шт. за лімітом 101.00 зі стопом 95.50, виконаний о 09:31 ET сесії
 /// й звірений. Повертає намір і відстежувану позицію (стоп — нога `ord-1-stop`).
 pub(crate) async fn held_aapl(dp: &Deps, h: &Handles) -> (Intent, TrackedPosition) {

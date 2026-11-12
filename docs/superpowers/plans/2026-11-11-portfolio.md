@@ -32,22 +32,36 @@
 
 ## Крок 3. Прохід ребалансу в `fond-engine`
 
-- [ ] Визначення «перший торговий день місяця/кварталу» за календарем
-      (чиста функція з тестами)
-- [ ] `portfolio_pass` у вечірньому аналізі після ризик-проходу: дельти →
-      наміри (`PendingApproval`/`Approved`), журнал-підсумок; коли не день
-      ребалансу — тихий пропуск
-- [ ] Rизик: купівлі в межах кешу (власна перевірка проходу, не
-      `risk::evaluate` — наміри не мають стопів); `max_orders_per_day`
-      враховує ребаланс-наміри
-- [ ] Submit: порядок черги з продажами ребалансу перед купівлями,
-      `build_rebalance_order` (Limit Day без стоп-леги)
-- [ ] Reconcile: `Rebalance` у кроці 1; купівля → tracked-позиція стратегії
-      `portfolio` без стопа; `check_stop` пропускає re-protect для неї;
-      продаж → зменшення qty (0 → закрито)
-- [ ] Тести: день місяця/кварталу, створення намірів, черга submit,
-      звірка купівлі/продажу
-- [ ] Коміт: `feat(engine): portfolio rebalance pass`
+- [x] «Перший торговий день місяця/кварталу» за календарем — чиста функція
+      `is_rebalance_day(session, mode, cal)` у `cycle/portfolio.rs`
+      (попередня сесія з іншого місяця/кварталу; без попередньої сесії —
+      не день ребалансу)
+- [x] `portfolio_pass` у вечірньому аналізі після AI-проходу: дельти →
+      наміри `PendingApproval`/`Approved` (за режимом виконання), пояснення
+      «докупити/продати до цілі N% (±$X)», журнал-підсумок, `IntentsPending`;
+      позарозкладний виклик — тихий пропуск. Тікери цілей зі swing-позиціями
+      або живим наміром сесії — пропуск із журналом; кеш = брокерський мінус
+      зарезервований живими входами/ребалансами сесії;
+      `AnalysisSummary.rebalances_created`
+- [x] Купівлі в межах вільного кешу (власна перевірка проходу); розклад
+      на день сесії; `orders_planned` враховує ребаланс-наміри; kill
+      `settle_submitted` включає Rebalance
+- [x] Submit: черга MoveStop(0) < Exit(1) < Rebalance Sell(2, без gate) <
+      Rebalance Buy(3, gate+ліміт як у входів) < Entry(4);
+      `build_rebalance_order` (Limit Day Simple, side за наміром);
+      `send_rebalance` (price sanity + submit_idempotent); поле `rebalances`
+      у `SubmitSummary` і finish-повідомленні
+- [x] Reconcile: `Rebalance` у кроці 1 (`rebalance_order`); купівля →
+      позиція стратегії `portfolio` без стопа (merge у наявну
+      portfolio-позицію; swing-конфлікт — журнал Error, намір Filled);
+      продаж → зменшення qty (0 → remove + cancel_open_sells), без
+      reprotect; крок 2 для portfolio-позицій: flat → close_flat,
+      інакше пропуск; `ReconcileReport.rebalances_filled` + summarize
+- [x] Тести: день місяця/кварталу/року, створення намірів (3 стенди),
+      черга submit (продаж перед купівлею, Limit Day Simple, price
+      sanity), звірка купівлі/продажу/не-виконано (210 тестів крейта,
+      workspace зелений)
+- [x] Коміт: `feat(engine): portfolio rebalance pass`
 
 ## Крок 4. Ручний запуск і REST
 

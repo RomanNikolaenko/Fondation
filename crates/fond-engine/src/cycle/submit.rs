@@ -58,6 +58,7 @@ pub struct SubmitSummary {
     pub entries: usize,
     pub exits: usize,
     pub stop_moves: usize,
+    pub rebalances: usize,
     pub failed: usize,
     pub skipped: usize,
 }
@@ -77,6 +78,7 @@ impl SubmitSummary {
             (Outcome::Sent, IntentKind::Entry { .. }) => &mut self.entries,
             (Outcome::Sent, IntentKind::Exit { .. }) => &mut self.exits,
             (Outcome::Sent, IntentKind::MoveStop { .. }) => &mut self.stop_moves,
+            (Outcome::Sent, IntentKind::Rebalance { .. }) => &mut self.rebalances,
         };
         *slot += 1;
     }
@@ -129,6 +131,31 @@ pub fn build_exit_order(i: &Intent, tif: TimeInForce) -> OrderRequest {
         limit_price: None,
         stop_price: None,
         tif,
+        class: OrderClass::Simple,
+        stop_loss: None,
+        take_profit: None,
+    }
+}
+
+/// Ребаланс: Buy/Sell Limit Day Simple без стоп-леги. Для наміру іншого виду `qty` = 0.
+pub fn build_rebalance_order(i: &Intent) -> OrderRequest {
+    let (side, qty, limit) = match &i.kind {
+        IntentKind::Rebalance {
+            side,
+            qty,
+            limit_price,
+        } => (*side, *qty, Some(*limit_price)),
+        _ => (Side::Buy, 0, None),
+    };
+    OrderRequest {
+        client_order_id: client_order_id(&i.id),
+        symbol: i.symbol.clone(),
+        side,
+        qty,
+        order_type: OrderType::Limit,
+        limit_price: limit,
+        stop_price: None,
+        tif: TimeInForce::Day,
         class: OrderClass::Simple,
         stop_loss: None,
         take_profit: None,
@@ -254,13 +281,20 @@ pub async fn run_pre_open_submit(
         return Ok(summary);
     }
 
-    // Порядок: підтягування стопів, виходи, входи (стабільне сортування зберігає черговість
+    // Порядок: підтягування стопів, виходи, продажі ребалансу (звільняють кеш),
+    // купівлі ребалансу, входи (стабільне сортування зберігає черговість
     // сховища всередині виду).
     let mut queue: Vec<&Intent> = approved.iter().collect();
     queue.sort_by_key(|i| match i.kind {
         IntentKind::MoveStop { .. } => 0,
         IntentKind::Exit { .. } => 1,
-        IntentKind::Entry { .. } => 2,
+        IntentKind::Rebalance {
+            side: Side::Sell, ..
+        } => 2,
+        IntentKind::Rebalance {
+            side: Side::Buy, ..
+        } => 3,
+        IntentKind::Entry { .. } => 4,
     });
     // Знімок позицій брокера на початку кроку: виходи продають не більше, ніж у ньому є.
     let mut held = if queue
@@ -285,7 +319,12 @@ pub async fn run_pre_open_submit(
         let outcome = match &intent.kind {
             IntentKind::MoveStop { new_stop, .. } => move_stop(d, intent, *new_stop).await?,
             IntentKind::Exit { .. } => send_exit(d, intent, TimeInForce::Opg, &mut held).await?,
-            IntentKind::Entry { .. } => {
+            // Купівлі ребалансу йдуть у тому самому gate, що й входи: спільний
+            // ліміт ордерів на день і перевірки режиму/лімітів збитку.
+            IntentKind::Entry { .. }
+            | IntentKind::Rebalance {
+                side: Side::Buy, ..
+            } => {
                 if gate.is_none() {
                     gate = Some(entry_gate(d, cfg, session).await?);
                 }
@@ -297,7 +336,10 @@ pub async fn run_pre_open_submit(
                             summary.skipped += queue.len() - n;
                             break;
                         }
-                        let outcome = send_entry(d, cfg, intent).await?;
+                        let outcome = match &intent.kind {
+                            IntentKind::Entry { .. } => send_entry(d, cfg, intent).await?,
+                            _ => send_rebalance(d, cfg, intent).await?,
+                        };
                         if outcome == Outcome::Sent {
                             *sent += 1;
                         }
@@ -306,6 +348,12 @@ pub async fn run_pre_open_submit(
                     _ => Outcome::Skipped,
                 }
             }
+            // Продаж ребалансу не блокується gate входів: звільняє кеш і не додає
+            // експозицію. Обсяг не більший за позицію за побудовою (`compute_deltas`
+            // продає не більше наявного), на тікер — один намір за сесію.
+            IntentKind::Rebalance {
+                side: Side::Sell, ..
+            } => send_rebalance(d, cfg, intent).await?,
         };
         summary.count(&intent.kind, outcome);
         if d.health.streak() >= BROKER_ERROR_STREAK {
@@ -370,14 +418,15 @@ async fn finish(
         None,
         format!(
             "Відправка перед відкриттям (сесія {session}): входів {}, виходів {}, підтягнуто \
-             стопів {}, помилок {}, пропущено {}{tail}",
-            s.entries, s.exits, s.stop_moves, s.failed, s.skipped
+             стопів {}, ребалансу {}, помилок {}, пропущено {}{tail}",
+            s.entries, s.exits, s.stop_moves, s.rebalances, s.failed, s.skipped
         ),
         json!({
             "session": session,
             "entries": s.entries,
             "exits": s.exits,
             "stop_moves": s.stop_moves,
+            "rebalances": s.rebalances,
             "failed": s.failed,
             "skipped": s.skipped,
             "stopped": stopped,
@@ -412,6 +461,7 @@ fn kind_label(k: &IntentKind) -> &'static str {
         IntentKind::Entry { .. } => "Вхід",
         IntentKind::Exit { .. } => "Вихід",
         IntentKind::MoveStop { .. } => "Підтягування стопа",
+        IntentKind::Rebalance { .. } => "Ребаланс",
     }
 }
 
@@ -657,6 +707,80 @@ async fn send_entry(d: &Deps, cfg: &EngineConfig, intent: &Intent) -> Result<Out
                 Some(sym),
                 Some(&intent.id),
                 format!("Вхід відправлено: ордер {}", order.id),
+                json!({
+                    "order_id": order.id,
+                    "client_order_id": order.client_order_id,
+                    "status": order.status,
+                }),
+            )
+            .await?;
+            Ok(Outcome::Sent)
+        }
+        Err(e) if unanswered_error(&e) => unanswered(d, intent, &e).await,
+        Err(e) => fail(d, intent, &format!("Помилка брокера: {e}")).await,
+    }
+}
+
+/// Ребаланс: перевірка ціни, відправка, намір `Submitted` з id ордера. Купівля
+/// проходить gate входів; продаж не обмежений gate — обсяг не більший за
+/// позицію за побудовою (`compute_deltas`).
+async fn send_rebalance(
+    d: &Deps,
+    cfg: &EngineConfig,
+    intent: &Intent,
+) -> Result<Outcome, CycleError> {
+    let IntentKind::Rebalance {
+        side,
+        qty,
+        limit_price,
+    } = &intent.kind
+    else {
+        return Ok(Outcome::Skipped);
+    };
+    let sym = &intent.symbol;
+    let Some(last) = last_price(d, sym).await? else {
+        return fail(d, intent, NO_LAST_PRICE).await;
+    };
+    let pct = cfg.risk.price_sanity_pct;
+    if !price_sane(to_f64(*limit_price), last, pct) {
+        let why = format!("Ціна поза межами ±{}% від останньої", percent(pct));
+        let data = json!({ "limit_price": limit_price.to_string(), "last_price": last });
+        return fail_with(d, intent, &why, data).await;
+    }
+
+    let req = build_rebalance_order(intent);
+    let verb = match side {
+        Side::Buy => "купівля",
+        Side::Sell => "продаж",
+    };
+    journal(
+        d,
+        EventKind::Order,
+        Some(sym),
+        Some(&intent.id),
+        format!("Відправляю ребаланс: {verb} {qty} шт. {sym} за лімітом {limit_price}"),
+        json!({ "client_order_id": req.client_order_id, "last_price": last }),
+    )
+    .await?;
+    match submit_idempotent(d, &req).await {
+        Ok(order) => {
+            let now = d.clock.now();
+            d.store.upsert_order(&order, now).await?;
+            d.store
+                .update_intent(
+                    &intent.id,
+                    IntentStatus::Submitted,
+                    now,
+                    Some(&order.id),
+                    None,
+                )
+                .await?;
+            journal(
+                d,
+                EventKind::Order,
+                Some(sym),
+                Some(&intent.id),
+                format!("Ребаланс відправлено: ордер {}", order.id),
                 json!({
                     "order_id": order.id,
                     "client_order_id": order.client_order_id,
@@ -1111,7 +1235,7 @@ mod tests {
     use super::super::reconcile::{flatten, reconcile};
     use super::super::test_support::{
         Handles, N_BARS, d, drain, entry_kind, et, fixture, flat_bars, held_aapl, intent_with,
-        journal_messages, session, start_date, submit_entry, sym,
+        journal_messages, session, start_date, submit_entry, sym, tracked,
     };
     use super::*;
 
@@ -1421,7 +1545,7 @@ mod tests {
         assert_eq!(
             journal[0],
             "Відправка перед відкриттям (сесія 2026-11-05): входів 1, виходів 0, підтягнуто \
-             стопів 0, помилок 0, пропущено 0"
+             стопів 0, ребалансу 0, помилок 0, пропущено 0"
         );
     }
 
@@ -2045,7 +2169,106 @@ mod tests {
         assert_eq!(
             journal_messages(&dp).await[0],
             "Відправка перед відкриттям (сесія 2026-11-05): входів 0, виходів 0, підтягнуто \
-             стопів 0, помилок 0, пропущено 3; зупинено: Аварійна зупинка"
+             стопів 0, ребалансу 0, помилок 0, пропущено 3; зупинено: Аварійна зупинка"
+        );
+    }
+
+    #[tokio::test]
+    async fn rebalance_sell_before_buy_and_limit_day_simple() {
+        let (dp, h) = setup().await;
+        h.data.set_latest_trade(&sym("MSFT"), 100.00);
+        h.data.set_latest_trade(&sym("SPY"), 100.00);
+        h.broker.set_position(&sym("MSFT"), 30, dec!(100.00));
+        // Відстежувана позиція під знімком звірки (без стопа — стратегія portfolio).
+        dp.store
+            .upsert_position(&tracked("MSFT", "portfolio", 30, 0.0, None), dp.clock.now())
+            .await
+            .unwrap();
+        let sell = intent_with(
+            "MSFT",
+            IntentTag::Rebalance,
+            IntentKind::Rebalance {
+                side: Side::Sell,
+                qty: 30,
+                limit_price: dec!(99.00),
+            },
+            IntentStatus::Approved,
+            None,
+        );
+        let buy = intent_with(
+            "SPY",
+            IntentTag::Rebalance,
+            IntentKind::Rebalance {
+                side: Side::Buy,
+                qty: 5,
+                limit_price: dec!(101.00),
+            },
+            IntentStatus::Approved,
+            None,
+        );
+        // Купівля вставлена першою: черга мусить поставити продаж перед нею.
+        insert(&dp, &[&buy, &sell]).await;
+        let summary = run(&dp).await;
+        assert_eq!(summary.rebalances, 2, "{summary:?}");
+        assert_eq!(summary.entries, 0);
+        assert_eq!(intent(&dp, &sell.id).await.status, IntentStatus::Submitted);
+        assert_eq!(intent(&dp, &buy.id).await.status, IntentStatus::Submitted);
+
+        // Продаж відправлено раніше за купівлю (журнал — новіші першими, тож
+        // повідомлення продажу стоїть у списку пізніше).
+        let journal = journal_messages(&dp).await;
+        let sell_at = journal
+            .iter()
+            .position(|m| m.contains("Відправляю ребаланс: продаж"))
+            .unwrap();
+        let buy_at = journal
+            .iter()
+            .position(|m| m.contains("Відправляю ребаланс: купівля"))
+            .unwrap();
+        assert!(sell_at > buy_at, "{journal:?}");
+
+        // Обидва ордери — Limit без стоп-леги.
+        let sent_sell = intent(&dp, &sell.id).await.broker_order_id.unwrap();
+        let sent_buy = intent(&dp, &buy.id).await.broker_order_id.unwrap();
+        let o_sell = h.broker.order(&sent_sell).await.unwrap();
+        let o_buy = h.broker.order(&sent_buy).await.unwrap();
+        assert_eq!(o_sell.side, Side::Sell);
+        assert_eq!(o_sell.order_type, OrderType::Limit);
+        assert_eq!(o_sell.limit_price, Some(dec!(99.00)));
+        assert!(o_sell.legs.is_empty());
+        assert_eq!(o_buy.side, Side::Buy);
+        assert_eq!(o_buy.order_type, OrderType::Limit);
+        assert_eq!(o_buy.limit_price, Some(dec!(101.00)));
+        assert!(o_buy.legs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn rebalance_respects_price_sanity_and_daily_limit() {
+        let (dp, h) = setup().await;
+        h.data.set_latest_trade(&sym("SPY"), 50.00);
+        let buy = intent_with(
+            "SPY",
+            IntentTag::Rebalance,
+            IntentKind::Rebalance {
+                side: Side::Buy,
+                qty: 5,
+                limit_price: dec!(101.00),
+            },
+            IntentStatus::Approved,
+            None,
+        );
+        insert(&dp, &[&buy]).await;
+        let summary = run(&dp).await;
+        assert_eq!(summary.rebalances, 0);
+        assert_eq!(summary.failed, 1);
+        let i = intent(&dp, &buy.id).await;
+        assert_eq!(i.status, IntentStatus::Failed);
+        assert!(
+            i.error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Ціна поза межами"),
+            "{i:?}"
         );
     }
 

@@ -74,6 +74,7 @@ fn kind_tag(k: &IntentKind) -> &'static str {
         IntentKind::Entry { .. } => "entry",
         IntentKind::Exit { .. } => "exit",
         IntentKind::MoveStop { .. } => "move_stop",
+        IntentKind::Rebalance { .. } => "rebalance",
     }
 }
 

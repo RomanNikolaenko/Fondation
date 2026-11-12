@@ -41,6 +41,7 @@ pub struct AnalysisSummary {
     pub entries_created: usize,
     pub exits_created: usize,
     pub stop_moves_created: usize,
+    pub rebalances_created: usize,
 }
 
 /// Причина відхилення ризик-менеджером — коротко, українською (показується в UI).
@@ -245,6 +246,7 @@ impl Run<'_> {
 
         // Заплановані входи рахуються як позиції (вартість qty × ліміт) і витрачають кошти,
         // так само як прийняті в цьому раунді кандидати.
+        let broker_cash = cash;
         let mut cash = cash;
         for i in live_entries
             .iter()
@@ -268,7 +270,7 @@ impl Run<'_> {
             .iter()
             .filter(|i| match i.kind {
                 IntentKind::Exit { .. } | IntentKind::MoveStop { .. } => true,
-                IntentKind::Entry { .. } => matches!(
+                IntentKind::Entry { .. } | IntentKind::Rebalance { .. } => matches!(
                     i.status,
                     IntentStatus::PendingApproval | IntentStatus::Approved
                 ),
@@ -302,6 +304,12 @@ impl Run<'_> {
             });
         }
 
+        // Ребаланс портфеля — після swing-проходу, коли позиції та наміри сесії
+        // вже враховані (власна перевірка кешу, спільні лише ліміти ордерів на день).
+        summary.rebalances_created = self
+            .portfolio_pass(&positions, equity, broker_cash, cal)
+            .await?;
+
         journal(
             d,
             EventKind::Cycle,
@@ -326,6 +334,7 @@ impl Run<'_> {
                 "entries_created": summary.entries_created,
                 "exits_created": summary.exits_created,
                 "stop_moves_created": summary.stop_moves_created,
+                "rebalances_created": summary.rebalances_created,
             }),
         )
         .await?;
@@ -420,7 +429,7 @@ impl Run<'_> {
         Ok(ok)
     }
 
-    fn intent(
+    pub(crate) fn intent(
         &self,
         id: String,
         symbol: &Symbol,

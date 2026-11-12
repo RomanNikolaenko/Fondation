@@ -6,6 +6,7 @@ pub(crate) mod ai_tests;
 pub mod analysis;
 pub mod filters;
 pub mod kill;
+pub mod portfolio;
 pub mod reconcile;
 pub mod refresh;
 pub mod submit;

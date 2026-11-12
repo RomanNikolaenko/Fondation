@@ -78,6 +78,7 @@ pub struct ReconcileReport {
     pub orders_updated: usize,
     pub entries_filled: Vec<Symbol>,
     pub exits_filled: Vec<Symbol>,
+    pub rebalances_filled: Vec<Symbol>,
     pub stops_hit: Vec<Symbol>,
     pub reprotected: Vec<Symbol>,
     pub mismatches: Vec<Mismatch>,
@@ -282,7 +283,8 @@ pub async fn reconcile(d: &Deps) -> Result<ReconcileReport, CycleError> {
         ..Pass::default()
     };
 
-    // 1. Підтягування стопа (MoveStop) завершує крок відправки, тут — лише входи й виходи.
+    // 1. Підтягування стопа (MoveStop) завершує крок відправки, тут — входи, виходи
+    //    і ребаланси.
     for intent in d
         .store
         .intents_with_status(&[IntentStatus::Submitted])
@@ -290,7 +292,7 @@ pub async fn reconcile(d: &Deps) -> Result<ReconcileReport, CycleError> {
     {
         if matches!(
             intent.kind,
-            IntentKind::Entry { .. } | IntentKind::Exit { .. }
+            IntentKind::Entry { .. } | IntentKind::Exit { .. } | IntentKind::Rebalance { .. }
         ) {
             submitted_intent(d, &intent, &mut pass).await?;
         }
@@ -298,9 +300,19 @@ pub async fn reconcile(d: &Deps) -> Result<ReconcileReport, CycleError> {
 
     // 2.
     for tp in d.store.positions().await? {
-        if !pass.skip_stop_check.contains(&tp.position.symbol) {
-            check_stop(d, &tp, &mut pass).await?;
+        let sym = tp.position.symbol.clone();
+        if pass.skip_stop_check.contains(&sym) {
+            continue;
         }
+        // Позиції портфеля живуть без стоп-леги: перевіряємо лише, що брокер
+        // ще тримає їх; закриту в брокера знімаємо з відстеження.
+        if tp.position.strategy.as_str() == fond_core::rebalance::PORTFOLIO_STRATEGY {
+            if pass.held(&sym) <= 0 {
+                close_flat(d, &tp, &mut pass).await?;
+            }
+            continue;
+        }
+        check_stop(d, &tp, &mut pass).await?;
     }
 
     // 3.
@@ -382,6 +394,7 @@ fn compare(tracked: &[TrackedPosition], pass: &Pass) -> Vec<Mismatch> {
 async fn summarize(d: &Deps, r: &ReconcileReport) -> Result<(), CycleError> {
     let changes = r.entries_filled.len()
         + r.exits_filled.len()
+        + r.rebalances_filled.len()
         + r.stops_hit.len()
         + r.reprotected.len()
         + r.mismatches.len();
@@ -395,10 +408,11 @@ async fn summarize(d: &Deps, r: &ReconcileReport) -> Result<(), CycleError> {
         None,
         None,
         format!(
-            "Звірка: виконано входів {}, виходів {}, спрацювало стопів {}, відновлено стопів {}, \
-             розбіжностей {}",
+            "Звірка: виконано входів {}, виходів {}, ребалансу {}, спрацювало стопів {}, \
+             відновлено стопів {}, розбіжностей {}",
             r.entries_filled.len(),
             r.exits_filled.len(),
+            r.rebalances_filled.len(),
             r.stops_hit.len(),
             r.reprotected.len(),
             r.mismatches.len()
@@ -407,6 +421,7 @@ async fn summarize(d: &Deps, r: &ReconcileReport) -> Result<(), CycleError> {
             "orders_updated": r.orders_updated,
             "entries_filled": names(&r.entries_filled),
             "exits_filled": names(&r.exits_filled),
+            "rebalances_filled": names(&r.rebalances_filled),
             "stops_hit": names(&r.stops_hit),
             "reprotected": names(&r.reprotected),
             "mismatches": r.mismatches.iter().map(Mismatch::describe).collect::<Vec<_>>(),
@@ -464,6 +479,11 @@ async fn submitted_intent(d: &Deps, intent: &Intent, pass: &mut Pass) -> Result<
         IntentKind::Entry { .. } => entry_order(d, intent, &order, pass).await,
         IntentKind::Exit { qty, .. } => exit_order(d, intent, qty, &order, pass).await,
         IntentKind::MoveStop { .. } => Ok(()),
+        IntentKind::Rebalance {
+            side,
+            qty,
+            limit_price,
+        } => rebalance_order(d, intent, side, qty, limit_price, &order, pass).await,
     }
 }
 
@@ -722,6 +742,181 @@ async fn exit_order(
         price,
     });
     pass.report.exits_filled.push(sym.clone());
+    Ok(())
+}
+
+/// Крок 1 для ребалансу. Купівля: створює/поповнює позицію стратегії `portfolio`
+/// без стопа (захист не потрібен — це довгострокова цільова вага). Продаж:
+/// зменшує кількість (нуль → позицію знято), re-protect не потрібен.
+/// Позиція swing-стратегії не торкається: розбіжність поставить паузу.
+async fn rebalance_order(
+    d: &Deps,
+    intent: &Intent,
+    side: Side,
+    _qty: u32,
+    limit_price: Decimal,
+    order: &BrokerOrder,
+    pass: &mut Pass,
+) -> Result<(), CycleError> {
+    let sym = &intent.symbol;
+    let filled = i64::from(order.filled_qty);
+    match side {
+        Side::Buy => bump(&mut pass.bought, sym, filled),
+        Side::Sell => bump(&mut pass.sold, sym, filled),
+    }
+    if !order.status.is_terminal() {
+        pass.skip_stop_check.insert(sym.clone());
+        bump(
+            &mut pass.inflight,
+            sym,
+            if side == Side::Buy { filled } else { -filled },
+        );
+        return Ok(());
+    }
+    let now = d.clock.now();
+    if order.filled_qty == 0 {
+        let why = format!("Ребаланс не виконано: ордер {}", status_text(&order.status));
+        d.store
+            .update_intent(
+                &intent.id,
+                IntentStatus::Cancelled,
+                now,
+                Some(&order.id),
+                Some(&why),
+            )
+            .await?;
+        journal(
+            d,
+            EventKind::Order,
+            Some(sym),
+            Some(&intent.id),
+            format!("{why} ({})", order.id),
+            json!({ "order_id": order.id, "status": order.status }),
+        )
+        .await?;
+        pass.skip_stop_check.insert(sym.clone());
+        return Ok(());
+    }
+
+    let price = order.filled_avg_price.unwrap_or(limit_price);
+    let filled_at = order.filled_at.unwrap_or(now);
+    let previous = d
+        .store
+        .positions()
+        .await?
+        .into_iter()
+        .find(|p| p.position.symbol == *sym);
+    if let Some(tp) = previous
+        .as_ref()
+        .filter(|tp| tp.position.strategy.as_str() != fond_core::rebalance::PORTFOLIO_STRATEGY)
+    {
+        let why = format!(
+            "Позиція {sym} належить стратегії {}; виконання ребалансу не об'єднано",
+            tp.position.strategy
+        );
+        journal(
+            d,
+            EventKind::Error,
+            Some(sym),
+            Some(&intent.id),
+            why,
+            json!({ "order_id": order.id, "strategy": tp.position.strategy }),
+        )
+        .await?;
+        pass.skip_stop_check.insert(sym.clone());
+        d.store
+            .update_intent(&intent.id, IntentStatus::Filled, now, Some(&order.id), None)
+            .await?;
+        return Ok(());
+    }
+
+    match side {
+        Side::Buy => {
+            let sector = {
+                let universe = d.store.universe(true).await?;
+                sector_of(universe.iter().find(|e| e.symbol == *sym))
+            };
+            let tp = match previous {
+                // Поповнення наявної позиції портфеля: кількість додається.
+                Some(mut tp) => {
+                    tp.position.qty += order.filled_qty;
+                    tp
+                }
+                None => TrackedPosition {
+                    position: Position {
+                        symbol: sym.clone(),
+                        strategy: intent.strategy.clone(),
+                        qty: order.filled_qty,
+                        entry_price: to_f64(price),
+                        entry_date: utc_to_et(filled_at).date_naive(),
+                        stop_price: 0.0,
+                        take_profit: None,
+                        sector,
+                    },
+                    stop_order_id: None,
+                    intent_id: intent.id.clone(),
+                },
+            };
+            // Позиція зберігається раніше за позначку наміру: збій посередині
+            // не губить виконання.
+            d.store.upsert_position(&tp, now).await?;
+            pass.skip_stop_check.insert(sym.clone());
+            d.store
+                .update_intent(&intent.id, IntentStatus::Filled, now, Some(&order.id), None)
+                .await?;
+        }
+        Side::Sell => {
+            pass.skip_stop_check.insert(sym.clone());
+            if let Some(tp) = &previous {
+                let remaining = tp.position.qty.saturating_sub(order.filled_qty);
+                if remaining == 0 {
+                    d.store.remove_position(sym).await?;
+                    cancel_open_sells(d, sym).await?;
+                } else {
+                    d.store
+                        .upsert_position(&with_qty(tp, remaining), now)
+                        .await?;
+                }
+            }
+            d.store
+                .update_intent(&intent.id, IntentStatus::Filled, now, Some(&order.id), None)
+                .await?;
+        }
+    }
+    let price_text = price_text(Some(price));
+    let partial = if order.filled_qty < order.qty {
+        format!(" (частково: {} з {})", order.filled_qty, order.qty)
+    } else {
+        String::new()
+    };
+    let verb = match side {
+        Side::Buy => "Купівля",
+        Side::Sell => "Продаж",
+    };
+    journal(
+        d,
+        EventKind::Fill,
+        Some(sym),
+        Some(&intent.id),
+        format!(
+            "Ребаланс виконано, {verb}: {} шт. за {price_text}{partial}",
+            order.filled_qty
+        ),
+        json!({
+            "order_id": order.id,
+            "qty": order.filled_qty,
+            "ordered": order.qty,
+            "price": price_text,
+        }),
+    )
+    .await?;
+    d.bus.publish(EngineEventDto::OrderFilled {
+        symbol: sym.to_string(),
+        side: side_name(side).into(),
+        qty: order.filled_qty,
+        price: price_text,
+    });
+    pass.report.rebalances_filled.push(sym.clone());
     Ok(())
 }
 
@@ -1194,13 +1389,13 @@ mod tests {
     use fond_core::intent::{IntentKind, IntentStatus};
     use fond_core::orders::{OrderClass, OrderRequest, OrderStatus, OrderType, Side, TimeInForce};
     use fond_core::traits::Broker;
-    use fond_core::types::EngineMode;
+    use fond_core::types::{EngineMode, StrategyId};
     use rust_decimal::Decimal;
     use rust_decimal_macros::dec;
 
     use super::super::test_support::{
         Handles, d, drain, entry_kind, et, fixture, held_aapl, intent_with, journal_messages,
-        session, submit_entry, submit_exit, sym,
+        session, submit_entry, submit_exit, submit_rebalance, sym, tracked,
     };
     use super::*;
 
@@ -2072,5 +2267,96 @@ mod tests {
                 broker: 7
             }]
         );
+    }
+
+    #[tokio::test]
+    async fn rebalance_buy_creates_portfolio_position_without_stop() {
+        let (dp, h) = setup().await;
+        let (i, order) = submit_rebalance(&dp, "AAPL", Side::Buy, 10, dec!(101.00)).await;
+        h.broker
+            .fill_at(&order.id, dec!(101.00), 10, et(session(), 9, 31));
+
+        let report = reconcile(&dp).await.unwrap();
+
+        assert_eq!(report.rebalances_filled, vec![sym("AAPL")]);
+        assert_eq!(status(&dp, &i.id).await, IntentStatus::Filled);
+        let held = dp.store.positions().await.unwrap();
+        assert_eq!(held.len(), 1);
+        let tp = &held[0];
+        assert_eq!(tp.position.symbol, sym("AAPL"));
+        assert_eq!(
+            tp.position.strategy,
+            StrategyId::new(fond_core::rebalance::PORTFOLIO_STRATEGY)
+        );
+        assert_eq!(tp.position.qty, 10);
+        assert_eq!(tp.position.entry_price, 101.0);
+        assert_eq!(tp.stop_order_id, None);
+        assert_eq!(tp.intent_id, i.id);
+        // Ідемпотентність: повторна звірка нічого не змінює.
+        let report2 = reconcile(&dp).await.unwrap();
+        assert!(report2.rebalances_filled.is_empty());
+        let held2 = dp.store.positions().await.unwrap();
+        assert_eq!(held2[0].position.qty, 10);
+    }
+
+    #[tokio::test]
+    async fn rebalance_buy_not_executed_is_cancelled() {
+        let (dp, h) = setup().await;
+        let (i, order) = submit_rebalance(&dp, "AAPL", Side::Buy, 10, dec!(101.00)).await;
+        // Ордер завершився без виконання.
+        h.broker.cancel(&order.id).await.unwrap();
+
+        let report = reconcile(&dp).await.unwrap();
+
+        assert!(report.rebalances_filled.is_empty());
+        assert_eq!(status(&dp, &i.id).await, IntentStatus::Cancelled);
+        assert!(dp.store.positions().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn rebalance_sell_reduces_position_and_closes_at_zero() {
+        let (dp, h) = setup().await;
+        let now = dp.clock.now();
+        dp.store
+            .upsert_position(&tracked("MSFT", "portfolio", 30, 0.0, None), now)
+            .await
+            .unwrap();
+        h.broker.set_position(&sym("MSFT"), 30, dec!(100.00));
+        let (i, order) = submit_rebalance(&dp, "MSFT", Side::Sell, 30, dec!(99.00)).await;
+        h.broker
+            .fill_at(&order.id, dec!(99.00), 30, et(session(), 9, 31));
+
+        let report = reconcile(&dp).await.unwrap();
+
+        assert_eq!(report.rebalances_filled, vec![sym("MSFT")]);
+        assert_eq!(status(&dp, &i.id).await, IntentStatus::Filled);
+        // Позицію закрито, re-protect не потрібен: відстежуваних позицій немає.
+        assert!(dp.store.positions().await.unwrap().is_empty());
+        // Розбіжностей немає: локальний стан збігається з брокером.
+        assert!(report.mismatches.is_empty());
+    }
+
+    #[tokio::test]
+    async fn rebalance_sell_keeps_rest_of_position() {
+        let (dp, h) = setup().await;
+        let now = dp.clock.now();
+        dp.store
+            .upsert_position(&tracked("MSFT", "portfolio", 30, 0.0, None), now)
+            .await
+            .unwrap();
+        h.broker.set_position(&sym("MSFT"), 30, dec!(100.00));
+        let (i, order) = submit_rebalance(&dp, "MSFT", Side::Sell, 10, dec!(99.00)).await;
+        h.broker
+            .fill_at(&order.id, dec!(99.00), 10, et(session(), 9, 31));
+
+        let report = reconcile(&dp).await.unwrap();
+
+        assert_eq!(report.rebalances_filled, vec![sym("MSFT")]);
+        assert_eq!(status(&dp, &i.id).await, IntentStatus::Filled);
+        let held = dp.store.positions().await.unwrap();
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].position.qty, 20);
+        assert_eq!(held[0].stop_order_id, None);
+        assert!(report.mismatches.is_empty());
     }
 }

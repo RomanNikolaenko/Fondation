@@ -4,6 +4,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
+use crate::orders::Side;
 use crate::traits::NewsVerdict;
 use crate::types::{StrategyId, Symbol};
 
@@ -61,6 +62,14 @@ pub enum IntentKind {
         #[cfg_attr(feature = "ts", ts(type = "string"))]
         new_stop: Decimal,
         stop_order_id: String,
+    },
+    /// Ребаланс портфеля: купівля/продаж до цільової ваги. Лімітний ордер на
+    /// день без стоп-леги; виконання відстежує звірка.
+    Rebalance {
+        side: Side,
+        qty: u32,
+        #[cfg_attr(feature = "ts", ts(type = "string"))]
+        limit_price: Decimal,
     },
 }
 

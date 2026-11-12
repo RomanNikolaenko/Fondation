@@ -318,10 +318,12 @@ async fn settle_submitted(d: &Deps, had_position: &HashSet<Symbol>) -> Result<us
         .intents_with_status(&[IntentStatus::Submitted])
         .await?;
     let mut cancelled = 0;
-    for i in submitted
-        .iter()
-        .filter(|i| matches!(i.kind, IntentKind::Entry { .. } | IntentKind::Exit { .. }))
-    {
+    for i in submitted.iter().filter(|i| {
+        matches!(
+            i.kind,
+            IntentKind::Entry { .. } | IntentKind::Exit { .. } | IntentKind::Rebalance { .. }
+        )
+    }) {
         let cid = client_order_id(&i.id);
         let keep = match observe(d, d.broker.order_by_client_id(&cid).await) {
             Err(e) => Some(format!("не вдалося перевірити ордер: {e}")),

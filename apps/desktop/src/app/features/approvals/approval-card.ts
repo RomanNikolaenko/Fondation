@@ -80,6 +80,8 @@ export class ApprovalCard implements OnInit, OnDestroy {
         return `Вихід · ${kind.reason}`;
       case 'move_stop':
         return 'Перенос стопа';
+      case 'rebalance':
+        return kind.side === 'buy' ? 'Ребаланс · купівля' : 'Ребаланс · продаж';
     }
   });
 

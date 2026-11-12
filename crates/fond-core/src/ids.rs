@@ -12,6 +12,7 @@ pub enum IntentTag {
     Entry,
     Exit,
     Stop,
+    Rebalance,
 }
 
 impl IntentTag {
@@ -20,6 +21,7 @@ impl IntentTag {
             Self::Entry => "entry",
             Self::Exit => "exit",
             Self::Stop => "stop",
+            Self::Rebalance => "rebalance",
         }
     }
 }
