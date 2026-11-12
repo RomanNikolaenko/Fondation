@@ -17,6 +17,7 @@ use fond_api::config::EngineConfig;
 use fond_api::events::EngineEventDto;
 use fond_core::calendar::{TradingCalendar, et_to_utc, utc_to_et};
 use fond_core::keys::SecretKey;
+use fond_core::price::to_f64;
 use fond_core::traits::Clock;
 use fond_store::{EventKind, NewEvent, StepName, StepStatus, Store, StoreError};
 use serde_json::{Value, json};
@@ -24,8 +25,9 @@ use tokio::sync::{Mutex, MutexGuard, RwLock, watch};
 use tokio::time::MissedTickBehavior;
 
 use crate::config_io::{ConfigError, save_atomic};
-use crate::cycle::analysis::run_analysis;
+use crate::cycle::analysis::{Run, run_analysis};
 use crate::cycle::reconcile::reconcile;
+use crate::cycle::refresh::{refresh_market_data, window_start};
 use crate::cycle::submit::{expire_pending, mark_missed, run_pre_open_submit};
 use crate::cycle::{CALENDAR_SPAN_DAYS, CycleError, journal_dto};
 use crate::deps::{Deps, DepsFactory, SetupError};
@@ -391,6 +393,75 @@ impl Engine {
         let step = DueStep::Analysis { date };
         self.run_step(&d, &cfg, &step).await?;
         Ok(date)
+    }
+
+    /// Ручний запуск ребалансу портфеля з UI: той самий прохід ребалансу, що й
+    /// розкладом, але без перевірки дня (manual). Сесія відправки — наступна
+    /// після останньої сесії на сьогодні. Повертає сесію відправки.
+    pub async fn run_manual_rebalance(self: Arc<Self>) -> Result<NaiveDate, CycleError> {
+        let result = self.run_manual_rebalance_inner().await;
+        if let Err(e) = &result {
+            // Помилка ручного запуску має бути видима в журналі та на шині подій.
+            self.note(
+                EventKind::Error,
+                format!("Ручний запуск ребалансу завершився помилкою: {e}"),
+                json!({
+                    "step": "portfolio_rebalance",
+                    "manual": true,
+                    "error": e.to_string()
+                }),
+            )
+            .await;
+        }
+        result
+    }
+
+    async fn run_manual_rebalance_inner(&self) -> Result<NaiveDate, CycleError> {
+        let cfg = self.config().await;
+        let d = match self.deps().await {
+            Ok(d) => d,
+            Err(SetupError::Other(m)) => return Err(CycleError::Other(m)),
+            Err(SetupError::MissingSecrets(keys)) => {
+                return Err(CycleError::Other(format!(
+                    "відсутні секрети: {}",
+                    keys.iter()
+                        .map(|k| k.account().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )));
+            }
+        };
+        let _job = self.job_lock.lock().await;
+        let now = self.clock.now();
+        self.ensure_calendar(&d, now).await?;
+        let today = utc_to_et(now).date_naive();
+        let span = Duration::days(CALENDAR_SPAN_DAYS);
+        let cal = TradingCalendar::new(self.store.sessions(today - span, today + span).await?);
+        // Остання сесія, час аналізу якої вже настав (як для вечірнього аналізу);
+        // наміри створюються на наступну сесію — день відправки.
+        let date = cal
+            .last_session_on_or_before(today)
+            .ok_or(CycleError::NoCalendar)?;
+        let session = cal.next_session_after(date).ok_or(CycleError::NoCalendar)?;
+        refresh_market_data(&d, &cfg, date).await?;
+        let run = Run {
+            d: &d,
+            cfg: &cfg,
+            date,
+            session,
+            from: window_start(&cfg, date),
+        };
+        let account = d.broker.account().await?;
+        let positions = d.store.positions().await?;
+        run.portfolio_pass(
+            &positions,
+            to_f64(account.equity),
+            to_f64(account.cash),
+            &cal,
+            true,
+        )
+        .await?;
+        Ok(session)
     }
 
     /// Календар зі сховища (±40 днів навколо сьогодні за ET) і записи кроків, які дивиться

@@ -107,6 +107,13 @@ pub struct AiRunQueuedDto {
     pub date: NaiveDate,
 }
 
+/// Відповідь на `POST /portfolio/rebalance/run`: 202, ребаланс триває у фоні.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct RebalanceRunQueuedDto {
+    /// Сесія відправки намірів ребалансу: наступна після останньої сесії.
+    pub date: NaiveDate,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct ScanResultDto {
     pub symbol: String,

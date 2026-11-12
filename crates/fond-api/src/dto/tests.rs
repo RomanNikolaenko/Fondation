@@ -21,6 +21,7 @@ fn export_to(cfg: &Config) -> Result<(), ExportError> {
     SignalDto::export_all(cfg)?;
     AiProposalDto::export_all(cfg)?;
     AiRunQueuedDto::export_all(cfg)?;
+    RebalanceRunQueuedDto::export_all(cfg)?;
     ScanResultDto::export_all(cfg)?;
     UniverseEntryDto::export_all(cfg)?;
     BacktestRunDto::export_all(cfg)?;

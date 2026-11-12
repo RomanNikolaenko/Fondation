@@ -59,35 +59,45 @@ pub fn is_rebalance_day(
 impl Run<'_> {
     /// Прохід ребалансу: дельти «ціль − факт» для позицій стратегії `portfolio`
     /// → наміри (статус за режимом виконання, як у swing-входів). Повертає
-    /// кількість створених намірів. Позарозкладний виклик — тихий пропуск.
+    /// кількість створених намірів. `manual = true` — ручний запуск з UI: без
+    /// перевірки дня ребалансу. Позарозкладний виклик — тихий пропуск.
     pub(crate) async fn portfolio_pass(
         &self,
         positions: &[TrackedPosition],
         equity: f64,
         broker_cash: f64,
         cal: &TradingCalendar,
+        manual: bool,
     ) -> Result<usize, CycleError> {
         let (d, cfg) = (self.d, self.cfg);
         let p = &cfg.portfolio;
-        if !p.enabled || !is_rebalance_day(self.session, p.rebalance, cal) {
+        let scheduled = is_rebalance_day(self.session, p.rebalance, cal);
+        if !p.enabled || (!scheduled && !manual) {
             return Ok(0);
         }
-        let period = match p.rebalance {
-            RebalanceMode::Monthly => "місяця",
-            _ => "кварталу",
+        let (intro, intro_data) = if scheduled {
+            let period = match p.rebalance {
+                RebalanceMode::Monthly => "місяця",
+                _ => "кварталу",
+            };
+            (
+                format!(
+                    "Ребаланс портфеля: сесія {} — перший торговий день {period}",
+                    self.session
+                ),
+                json!({ "step": "portfolio_rebalance", "session": self.session, "period": period }),
+            )
+        } else {
+            (
+                format!("Ребаланс портфеля: ручний запуск (сесія {})", self.session),
+                json!({
+                    "step": "portfolio_rebalance",
+                    "session": self.session,
+                    "manual": true,
+                }),
+            )
         };
-        journal(
-            d,
-            EventKind::Cycle,
-            None,
-            None,
-            format!(
-                "Ребаланс портфеля: сесія {} — перший торговий день {period}",
-                self.session
-            ),
-            json!({ "step": "portfolio_rebalance", "session": self.session, "period": period }),
-        )
-        .await?;
+        journal(d, EventKind::Cycle, None, None, intro, intro_data).await?;
 
         // Тікери під swing-керуванням портфель не чіпає: їх немає в цілях,
         // а цілі на них пропускаються з журналом.
@@ -418,6 +428,7 @@ mod tests {
         cfg: &EngineConfig,
         date: NaiveDate,
         session: NaiveDate,
+        manual: bool,
     ) -> usize {
         refresh_market_data(dp, cfg, date).await.unwrap();
         let cal = calendar_of(dp, date).await;
@@ -435,6 +446,7 @@ mod tests {
             to_f64(account.equity),
             to_f64(account.cash),
             &cal,
+            manual,
         )
         .await
         .unwrap()
@@ -483,7 +495,7 @@ mod tests {
             .unwrap();
 
         // Пт 30.10 — вечір; сесія пн 2.11 — перший торговий день листопада.
-        let created = run_pass(&dp, &cfg, d(2026, 10, 30), d(2026, 11, 2)).await;
+        let created = run_pass(&dp, &cfg, d(2026, 10, 30), d(2026, 11, 2), false).await;
         assert_eq!(created, 2);
 
         let session = d(2026, 11, 2);
@@ -541,7 +553,7 @@ mod tests {
         cfg.portfolio.rebalance = RebalanceMode::Monthly;
         cfg.portfolio.targets = BTreeMap::from([("SPY".to_string(), 0.2)]);
         // Не перший торговий день місяця — тихий пропуск, без подій ребалансу.
-        let created = run_pass(&dp, &cfg, d(2026, 11, 4), d(2026, 11, 5)).await;
+        let created = run_pass(&dp, &cfg, d(2026, 11, 4), d(2026, 11, 5), false).await;
         assert_eq!(created, 0);
         let messages = journal_messages(&dp).await;
         assert!(
@@ -554,12 +566,36 @@ mod tests {
     async fn pass_disabled_config_is_quiet() {
         let (dp, _h) = fixture().await;
         let cfg = EngineConfig::default(); // portfolio.enabled = false
-        let created = run_pass(&dp, &cfg, d(2026, 10, 30), d(2026, 11, 2)).await;
+        let created = run_pass(&dp, &cfg, d(2026, 10, 30), d(2026, 11, 2), false).await;
         assert_eq!(created, 0);
         let messages = journal_messages(&dp).await;
         assert!(
             !messages.iter().any(|m| m.contains("Ребаланс")),
             "{messages:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn pass_manual_run_off_schedule_creates_intents() {
+        let (dp, _h) = fixture().await;
+        let mut cfg = EngineConfig::default();
+        cfg.portfolio.enabled = true;
+        // Ребаланс вимкнено за розкладом: ручний запуск іде поза розкладом.
+        cfg.portfolio.rebalance = RebalanceMode::Off;
+        cfg.portfolio.targets = BTreeMap::from([("SPY".to_string(), 0.5)]);
+        // Не день ребалансу, але manual = true — наміри все одно створюються.
+        let created = run_pass(&dp, &cfg, d(2026, 11, 4), d(2026, 11, 5), true).await;
+        assert_eq!(created, 1);
+        let messages = journal_messages(&dp).await;
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("Ребаланс портфеля: ручний запуск (сесія 2026-11-05)")),
+            "{messages:?}"
+        );
+        let buy = rebalance(&dp, d(2026, 11, 5), "SPY")
+            .await
+            .expect("намір купівлі");
+        assert_eq!(buy.status, IntentStatus::PendingApproval);
     }
 }

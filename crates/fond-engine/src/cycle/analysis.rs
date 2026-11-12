@@ -307,7 +307,7 @@ impl Run<'_> {
         // Ребаланс портфеля — після swing-проходу, коли позиції та наміри сесії
         // вже враховані (власна перевірка кешу, спільні лише ліміти ордерів на день).
         summary.rebalances_created = self
-            .portfolio_pass(&positions, equity, broker_cash, cal)
+            .portfolio_pass(&positions, equity, broker_cash, cal, false)
             .await?;
 
         journal(

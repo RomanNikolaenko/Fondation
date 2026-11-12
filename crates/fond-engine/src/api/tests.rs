@@ -16,15 +16,15 @@ use fond_backtest::{BacktestRequest, CostModel};
 use fond_core::ai::{AiAction, AiProposal};
 use fond_core::calendar::et_to_utc;
 use fond_core::error::DataError;
-use fond_core::ids::IntentTag;
-use fond_core::intent::IntentStatus;
+use fond_core::ids::{IntentTag, intent_id};
+use fond_core::intent::{IntentKind, IntentStatus};
 use fond_core::keys::SecretKey;
 use fond_core::orders::Side;
 use fond_core::portfolio::Account;
 use fond_core::risk::RiskConfig;
 use fond_core::scanner::ScannerConfig;
 use fond_core::testkit::uptrend_then_pullback;
-use fond_core::types::{EngineMode, ExecutionMode, Symbol};
+use fond_core::types::{EngineMode, ExecutionMode, StrategyId, Symbol};
 use fond_store::{EquityKind, EquitySnapshot, EventQuery, NewAiProposal, StepName, StepStatus};
 use fond_strategies::StrategiesConfig;
 use futures::StreamExt;
@@ -1293,4 +1293,75 @@ async fn run_ai_conflicts_while_another_run_holds_mutex() {
     assert_eq!(st, StatusCode::CONFLICT);
     assert!(error_text(&body).contains("уже виконується"));
     drop(held);
+}
+
+#[tokio::test]
+async fn run_portfolio_rebalance_requires_enabled() {
+    let a = api().await; // portfolio.enabled = false за замовчуванням
+    let (st, body) = a.call(Method::POST, "/portfolio/rebalance/run", None).await;
+    assert_eq!(st, StatusCode::CONFLICT, "{body}");
+    assert!(error_text(&body).contains("вимкнено"), "{body}");
+}
+
+#[tokio::test]
+async fn run_portfolio_rebalance_conflicts_while_holding_mutex() {
+    let a = api().await;
+    // Портфель увімкнено, інакше конфлікт не доходить до замка.
+    let (_, old) = a.get("/config").await;
+    let mut cfg = old.clone();
+    cfg["portfolio"]["enabled"] = json!(true);
+    cfg["portfolio"]["rebalance"] = json!("monthly");
+    cfg["portfolio"]["targets"] = json!({ "SPY": 0.5 });
+    let (st, body) = a.call(Method::PUT, "/config", Some(cfg)).await;
+    assert_eq!(st, StatusCode::OK, "{body}");
+
+    let held = a.engine.jobs().try_portfolio().unwrap();
+    let (st, body) = a.call(Method::POST, "/portfolio/rebalance/run", None).await;
+    assert_eq!(st, StatusCode::CONFLICT, "{body}");
+    assert!(error_text(&body).contains("уже виконується"), "{body}");
+    drop(held);
+}
+
+#[tokio::test]
+async fn run_portfolio_rebalance_starts_in_background() {
+    let a = api().await;
+    // Портфель увімкнено в конфігурації: ціль SPY 50% (дані стенда).
+    let (_, old) = a.get("/config").await;
+    let mut cfg = old.clone();
+    cfg["portfolio"]["enabled"] = json!(true);
+    cfg["portfolio"]["rebalance"] = json!("monthly");
+    cfg["portfolio"]["targets"] = json!({ "SPY": 0.5 });
+    let (st, body) = a.call(Method::PUT, "/config", Some(cfg)).await;
+    assert_eq!(st, StatusCode::OK, "{body}");
+
+    let (st, v) = a.call(Method::POST, "/portfolio/rebalance/run", None).await;
+    assert_eq!(st, StatusCode::ACCEPTED, "{v}");
+    let date = chrono::NaiveDate::parse_from_str(v["date"].as_str().unwrap(), "%Y-%m-%d").unwrap();
+    assert_eq!(date, session());
+
+    // Намір ребалансу з'являється після фонового прогону.
+    let strategy = StrategyId::new(fond_core::rebalance::PORTFOLIO_STRATEGY);
+    let id = intent_id(date, &strategy, &Symbol::new("SPY"), IntentTag::Rebalance);
+    let deadline = tokio::time::Instant::now() + StdDuration::from_secs(30);
+    let intent = loop {
+        match a.d.store.intent(&id).await.unwrap() {
+            Some(i) => break i,
+            None => assert!(
+                tokio::time::Instant::now() < deadline,
+                "намір ребалансу не створено"
+            ),
+        }
+        tokio::time::sleep(StdDuration::from_millis(20)).await;
+    };
+    assert_eq!(intent.status, IntentStatus::PendingApproval, "{intent:?}");
+    assert!(
+        matches!(
+            intent.kind,
+            IntentKind::Rebalance {
+                side: Side::Buy,
+                ..
+            }
+        ),
+        "{intent:?}"
+    );
 }

@@ -16,8 +16,8 @@ use fond_api::config::EngineConfig;
 use fond_api::dto::{
     AccountDto, AddSymbolRequest, AiProposalDto, AiRunQueuedDto, BacktestDetailDto, BacktestRunDto,
     EngineModeDto, ExcludeRequest, HealthDto, HistoryJobDto, HistoryRequest, ImportResultDto,
-    KillRequest, KillResultDto, NextStepDto, PositionDto, ScanResultDto, SecretStatusDto,
-    SetSecretRequest, SignalDto, StatusDto, UniverseEntryDto, VerifyResultDto,
+    KillRequest, KillResultDto, NextStepDto, PositionDto, RebalanceRunQueuedDto, ScanResultDto,
+    SecretStatusDto, SetSecretRequest, SignalDto, StatusDto, UniverseEntryDto, VerifyResultDto,
 };
 use fond_api::events::{EngineEventDto, JournalEventDto};
 use fond_backtest::{BacktestRequest, BacktestResult};
@@ -372,6 +372,38 @@ pub async fn run_ai(
         }
     });
     Ok((StatusCode::ACCEPTED, Json(AiRunQueuedDto { date })))
+}
+
+/// 202 і запуск ребалансу портфеля у фоні; одночасно — лише один запуск
+/// (інакше 409). Тік розкладу чекає на замок рушія. Повертає сесію відправки:
+/// наступну після останньої сесії, час аналізу якої вже настав.
+pub async fn run_portfolio_rebalance(
+    State(st): State<ApiState>,
+) -> Result<(StatusCode, Json<RebalanceRunQueuedDto>), ApiError> {
+    let e = &st.engine;
+    if !e.config().await.portfolio.enabled {
+        return Err(ApiError::conflict("Портфель вимкнено в конфігурації"));
+    }
+    let Some(guard) = e.jobs().try_portfolio() else {
+        return Err(ApiError::conflict(
+            "Ребаланс уже виконується — дочекайтеся його завершення",
+        ));
+    };
+    let now = e.clock().now();
+    let (cal, _) = e.records_and_calendar().await?;
+    let today = utc_to_et(now).date_naive();
+    let date = cal
+        .last_session_on_or_before(today)
+        .and_then(|d| cal.next_session_after(d))
+        .ok_or_else(|| ApiError::conflict("У календарі немає торгової сесії для ребалансу"))?;
+    let engine = e.clone();
+    tokio::spawn(async move {
+        let _guard = guard;
+        if let Err(err) = engine.run_manual_rebalance().await {
+            tracing::warn!(error = %err, "ручний запуск ребалансу завершився помилкою");
+        }
+    });
+    Ok((StatusCode::ACCEPTED, Json(RebalanceRunQueuedDto { date })))
 }
 
 pub async fn scan(

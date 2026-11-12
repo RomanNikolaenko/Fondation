@@ -65,12 +65,19 @@
 
 ## Крок 4. Ручний запуск і REST
 
-- [ ] Mutex `portfolio` у `Jobs`; `Engine::run_manual_rebalance()`
-      (під `job_lock`, з журналюванням помилки)
-- [ ] `POST /portfolio/rebalance/run` → 202/409; `RebalanceRunQueuedDto`
-- [ ] Тести API: 202 → наміри створено, 409 конфлікт
-- [ ] Перегенерація DTO
-- [ ] Коміт: `feat(api): manual portfolio rebalance`
+- [x] Mutex `portfolio` у `Jobs`; `Engine::run_manual_rebalance()`
+      (під `job_lock`, з журналюванням помилки; сесія відправки =
+      наступна після останньої сесії, час аналізу якої настав);
+      `portfolio_pass(..., manual)` — ручний запуск без перевірки дня
+      з журналом «Ручний запуск (сесія …)»
+- [x] `POST /portfolio/rebalance/run` → 202/409 (вимкнено / замок
+      зайнятий); `RebalanceRunQueuedDto { date }` + TS-біндінги
+- [x] Тести API: 202 → намір ребалансу створено (через PUT /config
+      увімкнено портфель), 409 конфлікт замка, 409 вимкненого портфеля;
+      engine-тест ручного запуску поза розкладом (214 тестів крейта,
+      workspace зелений)
+- [x] Перегенерація DTO (`pnpm run gen:types`, `pnpm check` зелений)
+- [x] Коміт: `feat(api): manual portfolio rebalance`
 
 ## Крок 5. Екран «Портфель» у `apps/desktop`
 

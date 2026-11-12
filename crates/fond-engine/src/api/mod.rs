@@ -58,6 +58,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/scan", get(h::scan))
         .route("/proposals/ai", get(h::ai_proposals))
         .route("/proposals/ai/run", post(h::run_ai))
+        .route("/portfolio/rebalance/run", post(h::run_portfolio_rebalance))
         .route("/intents", get(h::intents))
         .route("/intents/{id}/approve", post(h::approve))
         .route("/intents/{id}/reject", post(h::reject))
