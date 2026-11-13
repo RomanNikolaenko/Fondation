@@ -20,7 +20,7 @@ const STATUS: StatusDto = {
 describe('Shell', () => {
   afterEach(() => TestBed.resetTestingModule());
 
-  it('shows PAPER banner and 10 nav items', async () => {
+  it('shows PAPER banner and 11 nav items', async () => {
     const mode = signal('running');
     const store = {
       status: signal<StatusDto | null>(STATUS),
@@ -43,7 +43,7 @@ describe('Shell', () => {
 
     const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
     expect(text).toContain('PAPER — віртуальні гроші');
-    expect(fixture.nativeElement.querySelectorAll('a.nav-link').length).toBe(10);
+    expect(fixture.nativeElement.querySelectorAll('a.nav-link').length).toBe(11);
     expect(fixture.nativeElement.querySelector('.badge')?.textContent).toContain('2');
     expect(store.start).toHaveBeenCalled();
   });

@@ -17,6 +17,7 @@ import type { IntentStatus } from './generated/IntentStatus';
 import type { JournalEventDto } from './generated/JournalEventDto';
 import type { KillResultDto } from './generated/KillResultDto';
 import type { PositionDto } from './generated/PositionDto';
+import type { RebalanceRunQueuedDto } from './generated/RebalanceRunQueuedDto';
 import type { ScanResultDto } from './generated/ScanResultDto';
 import type { SecretStatusDto } from './generated/SecretStatusDto';
 import type { SignalDto } from './generated/SignalDto';
@@ -73,6 +74,10 @@ export class EngineService {
 
   runAiAnalysis(): Promise<AiRunQueuedDto> {
     return this.call('run_ai_analysis');
+  }
+
+  runPortfolioRebalance(): Promise<RebalanceRunQueuedDto> {
+    return this.call('run_portfolio_rebalance');
   }
 
   getIntents(statuses: IntentStatus[] = []): Promise<Intent[]> {

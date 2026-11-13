@@ -54,6 +54,7 @@ pub fn run() {
             commands::get_scan,
             commands::get_ai_proposals,
             commands::run_ai_analysis,
+            commands::run_portfolio_rebalance,
             commands::get_intents,
             commands::approve_intent,
             commands::reject_intent,

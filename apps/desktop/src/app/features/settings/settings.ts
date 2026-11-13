@@ -6,6 +6,7 @@ import type { EngineConfig } from '../../core/generated/EngineConfig';
 import type { AiReviewConfig } from '../../core/generated/AiReviewConfig';
 import type { ExecutionMode } from '../../core/generated/ExecutionMode';
 import type { NewsFilterConfig } from '../../core/generated/NewsFilterConfig';
+import type { RebalanceMode } from '../../core/generated/RebalanceMode';
 import type { RiskConfig } from '../../core/generated/RiskConfig';
 import type { ScheduleConfig } from '../../core/generated/ScheduleConfig';
 import { etWallTimeToUtc, todayEt } from '../../core/tz';
@@ -91,7 +92,7 @@ function boolValue(event: Event): boolean {
   return (event.target as HTMLInputElement).checked;
 }
 
-/** Екран «Налаштування»: ключі, режим, ліміти, розклад, фільтри, AI, юніверс. */
+/** Екран «Налаштування»: ключі, режим, ліміти, розклад, фільтри, AI, портфель, юніверс. */
 @Component({
   selector: 'app-settings',
   standalone: true,
@@ -328,6 +329,50 @@ export class Settings implements OnInit {
       { value: 'low', label: 'низький' },
       { value: 'medium', label: 'середній' },
       { value: 'high', label: 'високий' },
+    ];
+  }
+
+  // ---------------------------------------------------------- портфель
+
+  protected setPortfolioEnabled(event: Event): void {
+    const value = boolValue(event);
+    this.patch((draft) => {
+      draft.portfolio.enabled = value;
+    });
+  }
+
+  protected setPortfolioRebalance(event: Event): void {
+    const value = inputValue(event);
+    const mode: RebalanceMode = value === 'monthly' || value === 'quarterly' ? value : 'off';
+    this.patch((draft) => {
+      draft.portfolio.rebalance = mode;
+    });
+  }
+
+  /** Поріг дрейфу в інтерфейсі — відсотки капіталу (0.05 → 5). */
+  protected portfolioDriftPercent(): number {
+    return Math.round((this.config()?.portfolio.drift ?? 0) * 100 * 1e6) / 1e6;
+  }
+
+  protected setPortfolioDrift(event: Event): void {
+    const fraction = numValue(event) / 100;
+    this.patch((draft) => {
+      draft.portfolio.drift = Math.round(fraction * 1e9) / 1e9;
+    });
+  }
+
+  protected setPortfolioMinOrder(event: Event): void {
+    const value = numValue(event);
+    this.patch((draft) => {
+      draft.portfolio.min_order_usd = value;
+    });
+  }
+
+  protected rebalanceModes(): Array<{ value: RebalanceMode; label: string }> {
+    return [
+      { value: 'off', label: 'вимкнено' },
+      { value: 'monthly', label: 'щомісяця' },
+      { value: 'quarterly', label: 'щокварталу' },
     ];
   }
 

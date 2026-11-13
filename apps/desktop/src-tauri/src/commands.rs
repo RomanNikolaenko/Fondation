@@ -4,8 +4,8 @@ use chrono::NaiveDate;
 use fond_api::config::EngineConfig;
 use fond_api::dto::{
     AccountDto, AddSymbolRequest, AiProposalDto, AiRunQueuedDto, ExcludeRequest, HistoryJobDto,
-    ImportResultDto, KillRequest, KillResultDto, PositionDto, ScanResultDto, SecretStatusDto,
-    SetSecretRequest, SignalDto, StatusDto, UniverseEntryDto, VerifyResultDto,
+    ImportResultDto, KillRequest, KillResultDto, PositionDto, RebalanceRunQueuedDto, ScanResultDto,
+    SecretStatusDto, SetSecretRequest, SignalDto, StatusDto, UniverseEntryDto, VerifyResultDto,
 };
 use fond_api::events::JournalEventDto;
 use fond_backtest::BacktestRequest;
@@ -92,6 +92,18 @@ pub async fn run_ai_analysis(state: State<'_, AppState>) -> Result<AiRunQueuedDt
     client(&state)
         .await?
         .send::<(), AiRunQueuedDto>(Method::POST, "/proposals/ai/run", None)
+        .await
+}
+
+/// Ручний запуск ребалансу портфеля: 202 (сесія відправки) або помилка
+/// конфлікту (портфель вимкнено / запуск уже йде).
+#[tauri::command]
+pub async fn run_portfolio_rebalance(
+    state: State<'_, AppState>,
+) -> Result<RebalanceRunQueuedDto, ClientError> {
+    client(&state)
+        .await?
+        .send::<(), RebalanceRunQueuedDto>(Method::POST, "/portfolio/rebalance/run", None)
         .await
 }
 

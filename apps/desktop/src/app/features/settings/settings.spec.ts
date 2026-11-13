@@ -274,4 +274,51 @@ describe('Settings screen', () => {
     expect(sent.ai.context_bars).toBe(120);
     expect(sent.ai.effort).toBe('low');
   });
+
+  it('portfolio fields patch the portfolio config on save', async () => {
+    const api = apiMock();
+    configure(api);
+
+    const fixture = TestBed.createComponent(Settings);
+    fixture.detectChanges();
+    await vi.waitFor(() => expect(api.getConfig).toHaveBeenCalled());
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+
+    (root.querySelector('input[name="portfolio_enabled"]') as HTMLInputElement).click();
+
+    const mode = root.querySelector('select[name="portfolio_rebalance"]') as HTMLSelectElement;
+    mode.value = 'quarterly';
+    mode.dispatchEvent(new Event('change'));
+
+    const drift = root.querySelector('input[name="portfolio_drift"]') as HTMLInputElement;
+    expect(drift.value).toBe('5');
+    drift.value = '7.5';
+    drift.dispatchEvent(new Event('input'));
+
+    const minOrder = root.querySelector('input[name="portfolio_min_order"]') as HTMLInputElement;
+    minOrder.value = '250';
+    minOrder.dispatchEvent(new Event('input'));
+
+    (root.querySelector('button.primary') as HTMLButtonElement).click();
+
+    await vi.waitFor(() => expect(api.putConfig).toHaveBeenCalledTimes(1));
+    const sent = api.putConfig.mock.calls[0]?.[0] as unknown as {
+      portfolio: {
+        enabled: boolean;
+        rebalance: string;
+        drift: number;
+        min_order_usd: number;
+        targets: object;
+      };
+    };
+    expect(sent.portfolio).toEqual({
+      enabled: true,
+      rebalance: 'quarterly',
+      drift: 0.075,
+      min_order_usd: 250,
+      targets: {},
+    });
+  });
 });

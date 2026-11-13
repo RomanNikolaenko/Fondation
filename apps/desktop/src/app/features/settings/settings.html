@@ -291,6 +291,56 @@
       на екрані «AI-аналіз».
     </p>
   </fieldset>
+
+  <fieldset class="card">
+    <legend>Портфель</legend>
+    <label class="check">
+      <input
+        type="checkbox"
+        name="portfolio_enabled"
+        [checked]="cfg.portfolio.enabled"
+        (change)="setPortfolioEnabled($event)"
+      />
+      <span>Увімкнути ребалансування портфеля</span>
+    </label>
+    <label>
+      <span>Періодичність</span>
+      <select
+        name="portfolio_rebalance"
+        [value]="cfg.portfolio.rebalance"
+        (change)="setPortfolioRebalance($event)"
+      >
+        @for (mode of rebalanceModes(); track mode.value) {
+        <option [value]="mode.value">{{ mode.label }}</option>
+        }
+      </select>
+    </label>
+    <label>
+      <span>Поріг відхилення, % капіталу</span>
+      <input
+        type="number"
+        name="portfolio_drift"
+        step="0.5"
+        [value]="portfolioDriftPercent()"
+        (input)="setPortfolioDrift($event)"
+      />
+    </label>
+    <label>
+      <span>Мінімальний ордер, $</span>
+      <input
+        type="number"
+        name="portfolio_min_order"
+        step="10"
+        [value]="cfg.portfolio.min_order_usd"
+        (input)="setPortfolioMinOrder($event)"
+      />
+    </label>
+    <p class="hint">
+      Цільові ваги тікерів задаються на екрані «Портфель». Ребаланс виконується разом із вечірнім
+      аналізом у перший торговий день місяця чи кварталу; наміри проходять ризик-ліміти й схвалення,
+      як і решта угод. Увімкнений портфель потребує періодичності «щомісяця» або «щокварталу».
+    </p>
+  </fieldset>
   }
 
   <app-universe-section />

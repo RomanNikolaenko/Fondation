@@ -1,0 +1,130 @@
+<section class="portfolio">
+  <h1>Портфель</h1>
+
+  <div class="run">
+    <button
+      type="button"
+      class="primary run-button"
+      [disabled]="running() || disabledInConfig()"
+      (click)="run()"
+    >
+      @if (running()) { Ребаланс виконується… } @else { Ребалансувати зараз }
+    </button>
+    @if (runMessage()) {
+    <span class="muted">{{ runMessage() }}</span>
+    }
+  </div>
+  @if (disabledInConfig()) {
+  <p class="muted disabled-hint">
+    Портфель вимкнено — увімкніть його в «Налаштуваннях», розділ «Портфель».
+  </p>
+  } @if (error()) {
+  <p class="error" role="alert">{{ error() }}</p>
+  } @if (loading()) {
+  <p class="muted">Завантаження…</p>
+  } @else {
+  <table class="facts">
+    <thead>
+      <tr>
+        <th>Символ</th>
+        <th>Ціль</th>
+        <th>Поточна вага</th>
+        <th>Відхилення</th>
+        <th>Оціночна дельта</th>
+        <th>Факт (шт.)</th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (row of rows(); track row.symbol) {
+      <tr [attr.data-symbol]="row.symbol">
+        <td>{{ row.symbol }}</td>
+        <td>{{ pct(row.targetPct) }}</td>
+        <td>{{ pct(row.weightPct) }}</td>
+        <td class="deviation" [class.over]="row.over">{{ pct(row.deviationPct) }}</td>
+        <td>{{ row.deltaUsd | money }}</td>
+        <td>{{ row.qty }}</td>
+      </tr>
+      }
+    </tbody>
+  </table>
+  @if (rows().length === 0) {
+  <p class="muted">Цілі не задані — додайте тікер і вагу.</p>
+  }
+
+  <h2>Цілі</h2>
+  <div class="editor">
+    <table>
+      <thead>
+        <tr>
+          <th>Тікер</th>
+          <th>Вага, %</th>
+          <th>Дії</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (target of draft(); track target.ticker) {
+        <tr>
+          <td>{{ target.ticker }}</td>
+          <td>
+            <input
+              type="number"
+              min="0"
+              max="100"
+              step="0.5"
+              [name]="'pct_' + target.ticker"
+              [attr.aria-label]="'Вага ' + target.ticker + ', %'"
+              [value]="target.pct"
+              (input)="setPct(target.ticker, $event)"
+            />
+          </td>
+          <td>
+            <button type="button" class="secondary" (click)="removeTarget(target.ticker)">
+              Видалити
+            </button>
+          </td>
+        </tr>
+        }
+      </tbody>
+    </table>
+
+    <div class="add">
+      <input
+        type="text"
+        name="new_ticker"
+        placeholder="Тікер"
+        autocomplete="off"
+        [value]="newTicker()"
+        (input)="onNewTicker($event)"
+      />
+      <input
+        type="number"
+        name="new_pct"
+        placeholder="Вага, %"
+        min="0"
+        max="100"
+        step="0.5"
+        [value]="newPct()"
+        (input)="onNewPct($event)"
+      />
+      <button type="button" class="secondary add-button" (click)="addTarget()">Додати</button>
+    </div>
+
+    <p class="total" [class.over-limit]="overLimit()">
+      Сума цілей: {{ pct(totalPct()) }}@if (overLimit()) { — понад 100 % }
+    </p>
+    <div class="save">
+      <button
+        type="button"
+        class="primary save-button"
+        [disabled]="saving() || overLimit()"
+        (click)="saveTargets()"
+      >
+        @if (saving()) { Зберігаємо… } @else { Зберегти цілі }
+      </button>
+      @if (savedMessage()) {
+      <span class="muted">{{ savedMessage() }}</span>
+      }
+    </div>
+  </div>
+  }
+</section>

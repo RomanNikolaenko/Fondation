@@ -25,6 +25,7 @@ export class Shell implements OnInit {
     { path: '', label: UK.nav.overview },
     { path: 'approvals', label: UK.nav.approvals },
     { path: 'positions', label: UK.nav.positions },
+    { path: 'portfolio', label: UK.nav.portfolio },
     { path: 'signals', label: UK.nav.signals },
     { path: 'ai', label: UK.nav.ai },
     { path: 'chart', label: UK.nav.chart },

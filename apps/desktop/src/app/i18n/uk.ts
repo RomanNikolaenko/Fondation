@@ -5,6 +5,7 @@ export const UK = {
     overview: 'Огляд',
     approvals: 'Схвалення',
     positions: 'Позиції',
+    portfolio: 'Портфель',
     signals: 'Сигнали',
     ai: 'AI-аналіз',
     chart: 'Графік',
