@@ -107,8 +107,11 @@ impl Run<'_> {
             .map(|tp| &tp.position.symbol)
             .collect();
 
-        // Кеш, зарезервований живими намірами сесії (входи й ребаланси):
-        // вони ще не виконані, але витратять гроші при відправці.
+        // Кеш, зарезервований живими намірами купівлі сесії (входи й
+        // ребаланс-купівлі): вони ще не виконані, але витратять гроші при
+        // відправці. Живий продаж кеш не резервує, а виручку з нього не
+        // зараховуємо, поки він не виконався. Тікер будь-якого живого наміру
+        // пропускається.
         let live = d.store.intents_for_session(self.session).await?;
         let mut reserved = 0.0_f64;
         let mut live_symbols: HashSet<Symbol> = HashSet::new();
@@ -126,9 +129,13 @@ impl Run<'_> {
                     live_symbols.insert(i.symbol.clone());
                 }
                 IntentKind::Rebalance {
-                    qty, limit_price, ..
+                    side,
+                    qty,
+                    limit_price,
                 } => {
-                    reserved += f64::from(*qty) * to_f64(*limit_price);
+                    if *side == Side::Buy {
+                        reserved += f64::from(*qty) * to_f64(*limit_price);
+                    }
                     live_symbols.insert(i.symbol.clone());
                 }
                 _ => {}
@@ -345,6 +352,7 @@ mod tests {
     use fond_core::rebalance::PORTFOLIO_STRATEGY;
     use fond_core::traits::Session;
     use fond_core::types::StrategyId;
+    use rust_decimal::Decimal;
     use rust_decimal_macros::dec;
 
     use super::super::analysis::Run;
@@ -678,6 +686,68 @@ mod tests {
                 .iter()
                 .any(|m| m.contains("позицію MSFT пропущено — уже є живий намір сесії")),
             "{messages:?}"
+        );
+    }
+
+    /// Ручний ребаланс з ціллю MSFT 50 % (equity і кеш 100 000, ціна 100,
+    /// ліміт 101), коли в сесії вже є живий ребаланс AAPL: `side` 600 акцій
+    /// за `limit`. Повертає кількість у намірі купівлі MSFT.
+    async fn msft_buy_with_live_aapl_rebalance(side: Side, limit: Decimal) -> u32 {
+        let (dp, _h) = fixture().await;
+        let mut cfg = EngineConfig::default();
+        cfg.portfolio.enabled = true;
+        cfg.portfolio.rebalance = RebalanceMode::Off;
+        cfg.portfolio.targets = BTreeMap::from([("MSFT".to_string(), 0.5)]);
+        let strategy = StrategyId::new(PORTFOLIO_STRATEGY);
+        let mut live = intent_with(
+            "AAPL",
+            IntentTag::Rebalance,
+            IntentKind::Rebalance {
+                side,
+                qty: 600,
+                limit_price: limit,
+            },
+            IntentStatus::PendingApproval,
+            None,
+        );
+        live.id = intent_id(session(), &strategy, &sym("AAPL"), IntentTag::Rebalance);
+        live.strategy = strategy;
+        dp.store.insert_intent(&live).await.unwrap();
+
+        let created = run_pass(&dp, &cfg, last_date(), session(), true).await;
+        assert_eq!(created, 1);
+        match rebalance(&dp, session(), "MSFT")
+            .await
+            .expect("купівля MSFT")
+            .kind
+        {
+            IntentKind::Rebalance {
+                side: Side::Buy,
+                qty,
+                ..
+            } => qty,
+            other => panic!("не той вид: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn live_rebalance_sell_does_not_reserve_cash() {
+        // Продаж кеш звільняє, а не витрачає: увесь кеш 100 000 доступний,
+        // купівля MSFT обмежена лише дельтою — 50 000 / 100 = 500 акцій.
+        // Якби продаж резервував 600 × 99, лишилося б 40 600 → 401 акція.
+        assert_eq!(
+            msft_buy_with_live_aapl_rebalance(Side::Sell, dec!(99.00)).await,
+            500
+        );
+    }
+
+    #[tokio::test]
+    async fn live_rebalance_buy_reserves_cash() {
+        // Купівля AAPL 600 × 101 = 60 600 ще не виконана, але кеш витратить:
+        // лишається 39 400 → floor(39 400 / 101) = 390 акцій MSFT.
+        assert_eq!(
+            msft_buy_with_live_aapl_rebalance(Side::Buy, dec!(101.00)).await,
+            390
         );
     }
 }
