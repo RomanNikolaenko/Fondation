@@ -3,8 +3,8 @@
 //! Викликається всередині вечірнього кроку аналізу, коли сесія відправки —
 //! перший торговий день місяця або кварталу. Наміри живуть у тому самому
 //! життєвому циклі, що й swing: схвалення → submit → звірка. Позиції
-//! swing-стратегій не торкаються: тікер під swing-керуванням виключається
-//! з цілей з журналюванням.
+//! swing-стратегій не торкаються: тікер під swing-керуванням або з живим
+//! наміром сесії виключається і з цілей, і з portfolio-позицій з журналюванням.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -135,40 +135,57 @@ impl Run<'_> {
             }
         }
 
-        // Цілі: тікери зі swing-позиціями або живим swing-входом виключаються.
+        // Тікери зі swing-позиціями або живим наміром сесії ребаланс не чіпає:
+        // їх немає ні в цілях, ні в позиціях для `compute_deltas`. Інакше
+        // portfolio-позиція без цілі стала б продажем «до нуля».
+        let skip_reason = |symbol: &Symbol| -> Option<&'static str> {
+            if swing.contains(symbol) {
+                Some("тікер під керуванням swing-стратегії")
+            } else if live_symbols.contains(symbol) {
+                Some("уже є живий намір сесії")
+            } else {
+                None
+            }
+        };
+        // (тікер, що пропущено: «ціль» чи «позицію», причина)
+        let mut skipped_tickers: Vec<(Symbol, &'static str, &'static str)> = Vec::new();
         let mut targets: BTreeMap<Symbol, f64> = BTreeMap::new();
-        let mut skipped_tickers: Vec<(Symbol, &'static str)> = Vec::new();
         for (ticker, weight) in &p.targets {
             let symbol = Symbol::new(ticker);
-            if swing.contains(&symbol) {
-                skipped_tickers.push((symbol, "тікер під керуванням swing-стратегії"));
-                continue;
+            match skip_reason(&symbol) {
+                Some(why) => skipped_tickers.push((symbol, "ціль", why)),
+                None => {
+                    targets.insert(symbol, *weight);
+                }
             }
-            if live_symbols.contains(&symbol) {
-                skipped_tickers.push((symbol, "уже є живий намір сесії"));
-                continue;
-            }
-            targets.insert(symbol, *weight);
         }
-        for (symbol, why) in &skipped_tickers {
+        let mut portfolio: Vec<Position> = Vec::new();
+        for tp in positions
+            .iter()
+            .filter(|tp| tp.position.strategy.as_str() == PORTFOLIO_STRATEGY)
+        {
+            let symbol = &tp.position.symbol;
+            match skip_reason(symbol) {
+                None => portfolio.push(tp.position.clone()),
+                // Ціль цього тікера вже пропущено — другий запис у журнал зайвий.
+                Some(_) if skipped_tickers.iter().any(|(s, ..)| s == symbol) => {}
+                Some(why) => skipped_tickers.push((symbol.clone(), "позицію", why)),
+            }
+        }
+        for (symbol, what, why) in &skipped_tickers {
             journal(
                 d,
                 EventKind::Cycle,
                 Some(symbol),
                 None,
-                format!("Ребаланс: ціль {symbol} пропущено — {why}"),
+                format!("Ребаланс: {what} {symbol} пропущено — {why}"),
                 json!({ "step": "portfolio_rebalance", "symbol": symbol, "reason": why }),
             )
             .await?;
         }
 
         // Ціни: останній close у вікні даних; тікер без барав — пропуск усередині
-        // `compute_deltas` (NoPrice).
-        let portfolio: Vec<Position> = positions
-            .iter()
-            .filter(|tp| tp.position.strategy.as_str() == PORTFOLIO_STRATEGY)
-            .map(|tp| tp.position.clone())
-            .collect();
+        // `compute_deltas` (NoPrice). Пропущені тікери не запитуються.
         let mut prices: HashMap<Symbol, f64> = HashMap::new();
         let mut price_symbols: HashSet<Symbol> = targets.keys().cloned().collect();
         price_symbols.extend(portfolio.iter().map(|p| p.symbol.clone()));
@@ -332,7 +349,10 @@ mod tests {
 
     use super::super::analysis::Run;
     use super::super::refresh::{refresh_market_data, window_start};
-    use super::super::test_support::{STRATEGY, d, fixture, journal_messages, sym, tracked};
+    use super::super::test_support::{
+        STRATEGY, d, entry_kind, fixture, intent_with, journal_messages, last_date, session, sym,
+        tracked,
+    };
     use super::is_rebalance_day;
 
     fn cal(dates: &[NaiveDate]) -> TradingCalendar {
@@ -597,5 +617,67 @@ mod tests {
             .await
             .expect("намір купівлі");
         assert_eq!(buy.status, IntentStatus::PendingApproval);
+    }
+
+    /// Ручний ребаланс на сесію `session()`, де вже є живий вхід
+    /// swing-стратегії по `ticker`, а портфель тримає 60 акцій `ticker`.
+    async fn pass_with_live_entry(
+        targets: BTreeMap<String, f64>,
+        ticker: &str,
+    ) -> (crate::deps::Deps, usize) {
+        let (dp, _h) = fixture().await;
+        let mut cfg = EngineConfig::default();
+        cfg.portfolio.enabled = true;
+        cfg.portfolio.rebalance = RebalanceMode::Off;
+        cfg.portfolio.targets = targets;
+        let now = dp.clock.now();
+        dp.store
+            .upsert_position(&tracked(ticker, PORTFOLIO_STRATEGY, 60, 0.0, None), now)
+            .await
+            .unwrap();
+        let entry = intent_with(
+            ticker,
+            IntentTag::Entry,
+            entry_kind(5, dec!(100.00), dec!(95.00), None),
+            IntentStatus::PendingApproval,
+            None,
+        );
+        dp.store.insert_intent(&entry).await.unwrap();
+        let created = run_pass(&dp, &cfg, last_date(), session(), true).await;
+        (dp, created)
+    }
+
+    #[tokio::test]
+    async fn pass_skips_target_position_with_live_entry_of_other_strategy() {
+        // Ціль SPY 20 % пропущено через живий вхід — позиція портфеля по SPY
+        // не повинна стати продажем «до нуля».
+        let (dp, created) =
+            pass_with_live_entry(BTreeMap::from([("SPY".to_string(), 0.2)]), "SPY").await;
+        assert_eq!(created, 0);
+        assert!(rebalance(&dp, session(), "SPY").await.is_none());
+        let messages = journal_messages(&dp).await;
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("ціль SPY пропущено — уже є живий намір сесії")),
+            "{messages:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn pass_skips_untargeted_position_with_live_entry_of_other_strategy() {
+        // Цілі на MSFT немає (позиція портфеля продавалася б до нуля), але в
+        // сесії вже є живий вхід по MSFT — тікер ребаланс не чіпає.
+        let (dp, created) =
+            pass_with_live_entry(BTreeMap::from([("SPY".to_string(), 0.2)]), "MSFT").await;
+        assert_eq!(created, 1); // купівля SPY
+        assert!(rebalance(&dp, session(), "MSFT").await.is_none());
+        let messages = journal_messages(&dp).await;
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("позицію MSFT пропущено — уже є живий намір сесії")),
+            "{messages:?}"
+        );
     }
 }
