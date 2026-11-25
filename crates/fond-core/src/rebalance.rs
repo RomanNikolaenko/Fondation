@@ -111,7 +111,8 @@ pub fn compute_deltas(
 
     let mut plan = RebalancePlan::default();
     let mut rows: Vec<(f64, RebalanceDelta)> = Vec::new(); // (дельта, намір)
-    let mut cash_left = fin(cash).max(0.0);
+    // Купівлі збираються окремо: кеш між ними розподіляється після циклу.
+    let mut buys: Vec<BuyCandidate> = Vec::new();
 
     for key in symbols {
         let symbol = key.clone();
@@ -145,18 +146,13 @@ pub fn compute_deltas(
         }
 
         if delta > 0.0 {
-            match buy_delta(
-                &symbol,
+            buys.push(BuyCandidate {
+                symbol,
                 delta,
                 price,
                 target_value,
                 current_value,
-                params,
-                &mut cash_left,
-            ) {
-                Ok(row) => rows.push((delta, row)),
-                Err(reason) => plan.skipped.push(Skipped { symbol, reason }),
-            }
+            });
         } else {
             // Продаж: не більше наявної кількості.
             #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
@@ -192,6 +188,20 @@ pub fn compute_deltas(
         }
     }
 
+    // Кеш дістається купівлям у порядку спадання дельти, а не за алфавітом
+    // тікерів. Сортування стабільне: за рівних дельт лишається алфавітний порядок.
+    buys.sort_by(|a, b| b.delta.total_cmp(&a.delta));
+    let mut cash_left = fin(cash).max(0.0);
+    for buy in buys {
+        match buy_delta(&buy, params, &mut cash_left) {
+            Ok(row) => rows.push((buy.delta, row)),
+            Err(reason) => plan.skipped.push(Skipped {
+                symbol: buy.symbol,
+                reason,
+            }),
+        }
+    }
+
     // Продажі перед купівлями; у групах — за спаданням модуля дельти.
     let is_sell = |d: &RebalanceDelta| d.side == Side::Sell;
     rows.sort_by(|a, b| {
@@ -203,24 +213,29 @@ pub fn compute_deltas(
     plan
 }
 
-/// Купівля: кількість за дельтою, обрізана під залишок кешу за лімітною ціною.
-/// `cash_left` зменшується на вартість створеної купівлі.
-fn buy_delta(
-    symbol: &Symbol,
+/// Кандидат на купівлю: дельта вже пройшла пороги, кеш ще не розподілено.
+struct BuyCandidate {
+    symbol: Symbol,
     delta: f64,
     price: f64,
     target_value: f64,
     current_value: f64,
+}
+
+/// Купівля: кількість за дельтою, обрізана під залишок кешу за лімітною ціною.
+/// `cash_left` зменшується на вартість створеної купівлі.
+fn buy_delta(
+    buy: &BuyCandidate,
     params: &RebalanceParams,
     cash_left: &mut f64,
 ) -> Result<RebalanceDelta, SkipReason> {
-    let limit = to_price(price * (1.0 + fin(params.max_gap)))
+    let limit = to_price(buy.price * (1.0 + fin(params.max_gap)))
         .ok()
         .filter(|limit| to_f64(*limit) > 0.0)
         .ok_or(SkipReason::BadPrice)?;
     let limit_f = to_f64(limit);
 
-    let mut qty = (delta / price).floor();
+    let mut qty = (buy.delta / buy.price).floor();
     if qty < 1.0 {
         return Err(SkipReason::BelowOneShare);
     }
@@ -235,12 +250,12 @@ fn buy_delta(
     }
     *cash_left -= f64::from(qty) * limit_f;
     Ok(RebalanceDelta {
-        symbol: symbol.clone(),
+        symbol: buy.symbol.clone(),
         side: Side::Buy,
         qty,
         limit_price: limit,
-        target_value,
-        current_value,
+        target_value: buy.target_value,
+        current_value: buy.current_value,
     })
 }
 
@@ -392,6 +407,33 @@ mod tests {
         assert_eq!(tsla.side, Side::Buy);
         assert_eq!(tsla.qty, 1); // залишок 95 → floor(95/50.5) = 1
         assert!(plan.skipped.is_empty());
+    }
+
+    #[test]
+    fn cash_goes_to_largest_buy_delta_first_not_alphabetical() {
+        // equity 10 000, ціни по 100 (ліміт 101): AAPL ціль 10% (дельта 1 000),
+        // TSLA ціль 50% (дельта 5 000). Кеш 2 020 — рівно на 20 акцій TSLA.
+        // За алфавітом AAPL забрала б 10 × 101 = 1 010 і TSLA лишилося б 10.
+        let plan = compute_deltas(
+            &targets(&[("AAPL", 0.1), ("TSLA", 0.5)]),
+            &[],
+            &prices(&[("AAPL", 100.0), ("TSLA", 100.0)]),
+            10_000.0,
+            2_020.0,
+            &params(),
+        );
+        assert_eq!(plan.deltas.len(), 1, "{plan:?}");
+        let tsla = &plan.deltas[0];
+        assert_eq!(tsla.symbol, Symbol::new("TSLA"));
+        assert_eq!(tsla.side, Side::Buy);
+        assert_eq!(tsla.qty, 20); // floor(2 020 / 101) = 20, кеш вичерпано
+        assert_eq!(
+            plan.skipped,
+            vec![Skipped {
+                symbol: Symbol::new("AAPL"),
+                reason: SkipReason::NotEnoughCash,
+            }]
+        );
     }
 
     #[test]
